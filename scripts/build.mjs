@@ -7,6 +7,7 @@ const requiredFiles = [
   "dist/favicon.svg",
   "dist/og-image.svg",
   "dist/og-image.png",
+  "dist/.nojekyll",
 ];
 
 await Promise.all(requiredFiles.map((file) => access(file)));
@@ -23,6 +24,12 @@ for (const copy of requiredCopy) {
   if (!html.includes(copy)) {
     throw new Error(`Missing required copy: ${copy}`);
   }
+}
+
+const rootRelativeAssets = html.match(/(?:href|src|content)="\/(?!\/)/g);
+
+if (rootRelativeAssets) {
+  throw new Error("Root-relative asset paths break on GitHub Pages project sites.");
 }
 
 console.log("Static site checks passed.");
