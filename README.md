@@ -1,6 +1,6 @@
-# errt
+# errrt
 
-The official home of errt — tiny software for everyday annoyances.
+The official home of errrt — tiny software for everyday annoyances.
 
 This is a dependency-free static site made for GitHub Pages. The published files live in `dist/`.
 

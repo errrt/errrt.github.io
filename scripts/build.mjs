@@ -14,6 +14,7 @@ await Promise.all(requiredFiles.map((file) => access(file)));
 
 const html = await readFile("dist/index.html", "utf8");
 const requiredCopy = [
+  "errrt",
   "Tiny software for everyday annoyances.",
   "PhraseCrate",
   "Tab Parcel",
