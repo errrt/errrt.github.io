@@ -3,8 +3,8 @@
  * Links left empty are shown as unavailable and cannot be clicked.
  */
 const SITE_LINKS = {
-  phraseCrate: "",
-  tabParcel: "",
+  phraseCrate: "https://chromewebstore.google.com/detail/phrasecrate/gngjinfejkkiflogppaadaandlenomcd?authuser=0&hl=ja",
+  tabParcel: "https://chromewebstore.google.com/detail/tab-parcel/pohjmphoidcblbneaeabbpjhcjjlbhke?authuser=0&hl=ja",
   tinyExpander: "",
   x: "",
   github: "",
