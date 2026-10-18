@@ -2,23 +2,22 @@
 
 The official home of errrt — tiny software for everyday annoyances.
 
-This is a dependency-free static site made for GitHub Pages. The published files live in `dist/`.
+This is a dependency-free static site made for GitHub Pages. GitHub publishes the repository root from `main`.
 
 ## File structure
 
 ```text
+index.html          # Page and SEO metadata
+.nojekyll           # Disables Jekyll processing on GitHub Pages
 dist/
-├── .nojekyll       # Disables Jekyll processing on GitHub Pages
 ├── favicon.svg
-├── index.html
 ├── og-image.png
 ├── og-image.svg
 ├── site-config.js  # Product and social URLs
 └── styles.css
 scripts/
-└── build.mjs       # Lightweight validation
-.github/workflows/
-└── deploy-pages.yml
+├── build.mjs       # Lightweight validation
+└── dev.mjs         # Local static server
 ```
 
 ## Local development
@@ -26,13 +25,13 @@ scripts/
 No dependency installation or compilation is required.
 
 ```sh
-pnpm dev
+npm run dev
 ```
 
 Open `http://localhost:4173`. Run the same validation used in CI with:
 
 ```sh
-pnpm build
+npm run build
 ```
 
 ## Update links
@@ -41,12 +40,12 @@ All product, X, and GitHub URLs live in `dist/site-config.js`. Replace the empty
 
 ## Deploy to GitHub Pages
 
-1. Create a GitHub repository and push this project to its `main` branch.
+1. Push this project to the `main` branch of `errrt/errrt.github.io`.
 2. Open the repository's **Settings → Pages**.
-3. Under **Build and deployment**, select **GitHub Actions** as the source.
-4. Push to `main`, or run **Deploy to GitHub Pages** manually from the Actions tab.
+3. Under **Build and deployment**, select **Deploy from a branch**.
+4. Select the `main` branch and `/ (root)`, then save.
 
-The workflow validates the site, uploads only `dist/`, and deploys it to GitHub Pages. Asset paths are relative, so both `https://user.github.io/` and `https://user.github.io/repository/` work without edits.
+The site is published automatically after every push to `main`. No build action or generated branch is needed.
 
 ## Custom domain
 
@@ -55,9 +54,9 @@ The workflow validates the site, uploads only `dist/`, and deploys it to GitHub 
    - For a subdomain such as `www.example.com`, create a `CNAME` pointing to `<user-or-org>.github.io` without a repository path.
    - For an apex domain such as `example.com`, use the current `A`, `AAAA`, `ALIAS`, or `ANAME` values from GitHub's documentation.
 3. After DNS is active, enable **Enforce HTTPS** in the Pages settings.
-4. Update the Open Graph image URL in `dist/index.html` to the final absolute domain if a social crawler does not resolve the relative URL.
+4. Update the canonical URL, `og:url`, and Open Graph image URLs in `index.html` to the custom domain.
 
-With a custom Actions workflow, GitHub stores the custom-domain setting itself; a committed `CNAME` file is not required.
+GitHub creates a `CNAME` file when a custom domain is saved for a branch-published site. Pull that commit before making later changes.
 
-- [GitHub Pages custom workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
+- [GitHub Pages publishing sources](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 - [GitHub Pages custom domains](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site)
