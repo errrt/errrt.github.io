@@ -19,6 +19,8 @@ const requiredCopy = [
   "PhraseCrate",
   "Tab Parcel",
   "Tiny Expander",
+  "https://static.cloudflareinsights.com/beacon.min.js",
+  "657f2e4fac22497e950b574f04ad4208",
 ];
 
 for (const copy of requiredCopy) {

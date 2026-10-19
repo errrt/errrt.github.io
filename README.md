@@ -47,6 +47,10 @@ All product, X, and GitHub URLs live in `dist/site-config.js`. Replace the empty
 
 The site is published automatically after every push to `main`. No build action or generated branch is needed.
 
+## Analytics
+
+Cloudflare Web Analytics is loaded once from `index.html` with the site token issued for `errrt.github.io`. The module script is placed before `</body>` so it does not block rendering or alter SEO metadata.
+
 ## Custom domain
 
 1. Open **Settings → Pages → Custom domain** and enter the domain.
