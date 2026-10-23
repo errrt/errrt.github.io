@@ -14,7 +14,8 @@ const contentTypes = {
 createServer(async (request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, `http://localhost:${port}`).pathname);
   const relativePath = pathname === "/" ? "index.html" : pathname.slice(1);
-  const isPublicFile = relativePath === "index.html" || relativePath.startsWith("dist/");
+  const isPublicFile =
+    relativePath === "index.html" || relativePath.startsWith("dist/") || relativePath.startsWith("go/");
 
   if (!isPublicFile || relativePath.includes("..")) {
     response.writeHead(404).end("Not found");
