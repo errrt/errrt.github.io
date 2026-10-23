@@ -1,0 +1,73 @@
+name: Daily Growth Report
+
+on:
+  schedule:
+    - cron: "30 19 * * *" # 04:30 JST; finish before the 05:00 reporting deadline
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: "Optional YYYY-MM-DD report date"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: daily-growth-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Restore recent growth history
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          previous_run="$(gh run list --workflow daily-growth.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [ -n "$previous_run" ]; then
+            gh run download "$previous_run" --name growth-history --dir growth-history || true
+          fi
+
+      - name: Generate report
+        env:
+          REPORT_DATE: ${{ inputs.report_date || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GROWTH_GITHUB_TOKEN: ${{ secrets.GROWTH_GITHUB_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          OPENAI_MAX_OUTPUT_TOKENS: "1200"
+        run: |
+          args=()
+          if [ -n "$REPORT_DATE" ]; then
+            args+=(--date "$REPORT_DATE")
+          fi
+          python -m growth_agent.main "${args[@]}"
+          cat growth-output/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        uses: actions/upload-artifact@v7
+        with:
+          name: growth-report-${{ github.run_id }}
+          path: growth-output/
+          retention-days: 90
+
+      - name: Upload rolling history
+        uses: actions/upload-artifact@v7
+        with:
+          name: growth-history
+          path: growth-history/
+          retention-days: 90
+          overwrite: true

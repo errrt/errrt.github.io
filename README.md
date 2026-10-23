@@ -18,6 +18,10 @@ dist/
 scripts/
 ├── build.mjs       # Lightweight validation
 └── dev.mjs         # Local static server
+growth_agent/        # Daily collectors, analysis, and Markdown report
+growth-agent.json    # Non-secret source configuration
+go/                  # Same-origin outbound click redirect pages
+.github/workflows/daily-growth.yml
 ```
 
 ## Local development
@@ -36,7 +40,7 @@ npm run build
 
 ## Update links
 
-All product, X, and GitHub URLs live in `dist/site-config.js`. Replace the empty strings in `SITE_LINKS`; no HTML editing is needed. Empty URLs are displayed as unavailable links.
+All product, X, and GitHub URLs live in `dist/site-config.js`. Replace the empty strings in `LINK_TARGETS`; no HTML editing is needed. Empty URLs are displayed as unavailable links.
 
 ## Deploy to GitHub Pages
 
@@ -50,6 +54,69 @@ The site is published automatically after every push to `main`. No build action 
 ## Analytics
 
 Cloudflare Web Analytics is loaded once from `index.html` with the site token issued for `errrt.github.io`. The module script is placed before `</body>` so it does not block rendering or alter SEO metadata.
+
+PhraseCrate, Tab Parcel, GitHub, and X links use same-origin `/go/<key>/index.html` redirect pages. Those pages load the same Cloudflare beacon before forwarding to the external destination, so daily link clicks can be queried by `requestPath` without adding another analytics vendor. A destination that has not been confirmed remains disabled instead of being guessed.
+
+## Daily Growth Agent
+
+GitHub Actions starts the report at 04:30 JST every day so it can finish before 05:00. The workflow stores two 90-day artifacts:
+
+- `growth-report-<run id>`: `snapshot.json` and the Japanese `report.md`
+- `growth-history`: rolling daily snapshots used for previous-day, 7-day, and 30-day comparisons
+
+The Markdown report is also written to the workflow's **Summary** page. Missing and failed values remain `null`/`—`; they are never converted to zero. A deterministic report is always generated, while OpenAI analysis is optional.
+
+Run it locally with yesterday's JST date:
+
+```sh
+python -m growth_agent.main
+```
+
+Or reproduce a specific day:
+
+```sh
+python -m growth_agent.main --date 2026-10-23
+```
+
+### Required GitHub configuration
+
+Open **Settings → Secrets and variables → Actions**. Do not commit any token.
+
+| Name | Kind | Required | Purpose |
+|---|---|---:|---|
+| `CLOUDFLARE_API_TOKEN` | Secret | Yes for LP analytics | Cloudflare token restricted to **Account Analytics: Read** for the errrt account |
+| `GROWTH_GITHUB_TOKEN` | Secret | Only for private repos or traffic | Fine-grained token restricted to the configured repositories; public metadata works anonymously and the built-in `GITHUB_TOKEN` is used in Actions |
+| `X_BEARER_TOKEN` | Secret | Only after paid X API approval | Reads posts and public metrics; set an X developer spend limit first |
+| `OPENAI_API_KEY` | Secret | Optional | Adds AI observations/hypotheses to the deterministic report |
+| `OPENAI_MODEL` | Actions variable | Optional | Model used when `OPENAI_API_KEY` is enabled |
+
+The Cloudflare Account ID and Web Analytics Site Tag are non-secret identifiers and are already in `growth-agent.json`. `CLOUDFLARE_ACCOUNT_ID` may be supplied as a Secret to override the file. The configured API token must not have write permissions.
+
+The errrt X account is configured as `@errrt0dev`. Its public link is measured through `go/x/index.html`. X API reads are usage-priced, so performance collection remains inactive until paid API access and a spend limit are explicitly approved.
+
+### Chrome Web Store data
+
+There is no official Chrome Web Store analytics API for daily installs, uninstalls, impressions, ratings, or reviews. The official dashboard supports CSV export and optional GA4. The collector therefore uses this order:
+
+1. A normalized official CSV at `imports/chrome-web-store/<slug>.csv`.
+2. If the CSV/day is absent, the public Chrome Web Store listing is read for displayed users, rating, and rating count only.
+
+The public value is marked `partial` and `data_source: public_listing`; it may be rounded. It is not relabeled as installs. Exact install/uninstall/impression and acquisition-source reporting requires a normalized CSV with:
+
+```csv
+date,installs,uninstalls,users,impressions,rating,reviews,acquisition_source
+2026-10-23,1,0,4,20,0,0,direct
+```
+
+### Cost and safety controls
+
+- Cloudflare Web Analytics, GitHub Actions within account limits, and public Chrome Web Store reads add no new paid service.
+- OpenAI is capped to 1,200 output tokens per run in the workflow (2,000 hard cap in code).
+- X is disabled until the username, paid access, and spend limit are explicitly approved.
+- The workflow does not create Issues/PRs, merge, deploy, or publish X posts. It only prepares and reports recommended actions.
+- Re-running the same date overwrites that date's snapshot, making collection idempotent.
+
+See [the Phase 1 investigation](docs/growth-agent-phase-1.md) for metric availability, permissions, limitations, and official references.
 
 ## Custom domain
 
