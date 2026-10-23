@@ -29,7 +29,9 @@ def main():
         "generated_at": datetime.now(timezone).isoformat(),
         "sources": {
             "cloudflare": collect_cloudflare(config["cloudflare"], report_date, config.get("timezone", "Asia/Tokyo")),
-            "chrome_web_store": collect_chrome_web_store(config["chrome_web_store"], report_date, args.imports_dir),
+            "chrome_web_store": collect_chrome_web_store(
+                config["chrome_web_store"], report_date, args.imports_dir, config.get("timezone", "Asia/Tokyo")
+            ),
             "x": collect_x(config["x"], report_date, config.get("timezone", "Asia/Tokyo")),
             "github": collect_github(config["github"], report_date, config.get("timezone", "Asia/Tokyo")),
         },

@@ -124,12 +124,18 @@ def _collect_public_store_item(product):
     return {"status": "partial", "error": None, "metrics": _public_store_metrics(page)}
 
 
-def collect_chrome_web_store(config, report_date, imports_dir):
+def collect_chrome_web_store(config, report_date, imports_dir, timezone_name="Asia/Tokyo"):
     results = {}
+    latest_complete_date = datetime.now(ZoneInfo(timezone_name)).date() - timedelta(days=1)
     for product in config.get("products", []):
         slug = product["slug"]
         path = imports_dir / f"{slug}.csv"
         if not path.exists():
+            if report_date != latest_complete_date:
+                results[slug] = missing(
+                    "Public listing is a current observation and cannot be used as historical data; official CSV required"
+                )
+                continue
             try:
                 results[slug] = _collect_public_store_item(product)
             except Exception as error:
@@ -142,6 +148,11 @@ def collect_chrome_web_store(config, report_date, imports_dir):
                 rows = list(csv.DictReader(handle))
             matching = [row for row in rows if row.get("date", row.get("Date")) == report_date.isoformat()]
             if not matching:
+                if report_date != latest_complete_date:
+                    results[slug] = missing(
+                        f"No CSV row for {report_date.isoformat()}; public listing cannot be backdated"
+                    )
+                    continue
                 try:
                     results[slug] = _collect_public_store_item(product)
                     results[slug]["metrics"]["limitations"] = (

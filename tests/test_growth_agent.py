@@ -5,7 +5,7 @@ from pathlib import Path
 import os
 
 from growth_agent.report import build_actions, render
-from growth_agent.collectors import _public_store_metrics, _utc_range, collect_cloudflare
+from growth_agent.collectors import _public_store_metrics, _utc_range, collect_chrome_web_store, collect_cloudflare
 from datetime import date
 
 
@@ -92,6 +92,15 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(metrics["users"], 1500)
         self.assertEqual(metrics["rating"], 4.8)
         self.assertEqual(metrics["reviews"], 1234)
+
+    @patch("growth_agent.collectors._collect_public_store_item")
+    def test_public_store_current_value_is_not_backdated(self, collect_public):
+        config = {"products": [{"slug": "phrasecrate", "item_id": "item"}]}
+        with tempfile.TemporaryDirectory() as directory:
+            result = collect_chrome_web_store(config, date(2026, 10, 1), Path(directory), "Asia/Tokyo")
+        self.assertEqual(result["phrasecrate"]["status"], "missing")
+        self.assertIn("cannot be used as historical data", result["phrasecrate"]["error"])
+        collect_public.assert_not_called()
 
 
 if __name__ == "__main__":
