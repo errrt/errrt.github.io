@@ -2,7 +2,7 @@ const LINK_TARGETS = {
   phraseCrate: "https://chromewebstore.google.com/detail/phrasecrate/gngjinfejkkiflogppaadaandlenomcd",
   tabParcel: "https://chromewebstore.google.com/detail/tab-parcel/pohjmphoidcblbneaeabbpjhcjjlbhke",
   tinyExpander: "",
-  x: "",
+  x: "https://x.com/errrt0dev",
   github: "https://github.com/errrt",
 };
 

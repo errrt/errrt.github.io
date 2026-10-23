@@ -10,6 +10,7 @@ const requiredFiles = [
   "go/phraseCrate/index.html",
   "go/tabParcel/index.html",
   "go/github/index.html",
+  "go/x/index.html",
   ".nojekyll",
 ];
 
@@ -37,6 +38,7 @@ const requiredLinks = [
   "https://github.com/errrt",
   "https://chromewebstore.google.com/detail/phrasecrate/gngjinfejkkiflogppaadaandlenomcd",
   "https://chromewebstore.google.com/detail/tab-parcel/pohjmphoidcblbneaeabbpjhcjjlbhke",
+  "https://x.com/errrt0dev",
   "`/go/${key}/index.html`",
 ];
 

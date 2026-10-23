@@ -9,7 +9,7 @@
 | errrt LP | https://errrt.github.io/ | `errrt/errrt.github.io` のGitHub Pages。Cloudflare Web Analyticsの正式なSite Tag `1709ef2ee75e4ed88b82a65361e0588a`へ修正済み |
 | PhraseCrate | Chrome Web Store item `gngjinfejkkiflogppaadaandlenomcd` | LP設定から確認 |
 | Tab Parcel | Chrome Web Store item `pohjmphoidcblbneaeabbpjhcjjlbhke` | LP設定から確認 |
-| X | 未設定 | LPのX URLが空。X検索でもブランドアカウントを特定できず、現在ログイン中のアカウントは`@koeapp`。正確なユーザー名の確認が必要 |
+| X | https://x.com/errrt0dev | 表示名`errrt`、ユーザー名`@errrt0dev`として確認。LPリンクとcollector設定へ反映済み |
 | GitHub | `errrt/errrt.github.io`, `errrt/tab-dump-privacy` | LPはcheckoutのremoteから確認。後者は公開repoの最新commitがTab Parcel Pro privacy policyであることを確認 |
 
 LPの外部リンクは`/go/<key>/index.html`を経由する。同じCloudflare Web Analyticsビーコンでこの中継ページを計測し、GraphQLの`requestPath`からリンク別クリック数を取得する。Cloudflare Web Analyticsがcustom eventsを提供しないため、非公式イベントAPIや別の分析サービスは追加していない。
@@ -34,7 +34,7 @@ GitHubの公開APIで確認できた公開repoは`archlint`、`errrt.github.io`�
 
 1. `gh auth login -h github.com`でローカルGitHub CLI認証を復旧する。PhraseCrate本体repoが別名または別ownerなら、その正確なrepo名を`growth-agent.json`へ追加する。
 2. GitHub Actions Secretsに`CLOUDFLARE_API_TOKEN`を追加する。Account IDとSite Tagは非機密設定として`growth-agent.json`に設定済み。
-3. Xのユーザー名を`growth-agent.json`に設定する。有料のX API credit購入は事前承認後に行う。
+3. Xのユーザー名`errrt0dev`は`growth-agent.json`に設定済み。有料のX API credit購入は別途事前承認後に行う。
 4. 複数repoを読む場合は、対象repoだけに絞ったfine-grained PATを`GROWTH_GITHUB_TOKEN`として追加する。trafficにはAdministration: Readが必要。
 5. 正確な日次獲得指標が必要なら、Chrome Web Storeの公式CSVを`imports/chrome-web-store/<slug>.csv`へ配置する。列名は`date,installs,uninstalls,users,impressions,rating,reviews,acquisition_source`へ正規化する。未投入日は公開listingのusers・評価のみ自動取得する。
 6. AI分析を有効化する場合だけ`OPENAI_API_KEY` Secretと`OPENAI_MODEL` Actions Variableを追加する。1実行の出力は最大1,200 tokens（コード上限2,000）に制限している。

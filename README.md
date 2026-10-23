@@ -92,7 +92,7 @@ Open **Settings → Secrets and variables → Actions**. Do not commit any token
 
 The Cloudflare Account ID and Web Analytics Site Tag are non-secret identifiers and are already in `growth-agent.json`. `CLOUDFLARE_ACCOUNT_ID` may be supplied as a Secret to override the file. The configured API token must not have write permissions.
 
-The exact errrt X username is intentionally unset. Once confirmed, set `x.username` in `growth-agent.json`, add the public X URL to `dist/site-config.js`, add `go/x/index.html`, and include it in `scripts/build.mjs`. X read requests are usage-priced, so the workflow remains inactive for X until approved.
+The errrt X account is configured as `@errrt0dev`. Its public link is measured through `go/x/index.html`. X API reads are usage-priced, so performance collection remains inactive until paid API access and a spend limit are explicitly approved.
 
 ### Chrome Web Store data
 
