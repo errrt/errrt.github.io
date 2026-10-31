@@ -64,7 +64,7 @@ GitHub Actions starts the report at 04:30 JST every day so it can finish before 
 - `growth-report-<run id>`: `snapshot.json` and the Japanese `report.md`
 - `growth-history`: rolling daily snapshots used for previous-day, 7-day, and 30-day comparisons
 
-The Markdown report is also written to the workflow's **Summary** page. Missing and failed values remain `null`/`—`; they are never converted to zero. A deterministic report is always generated, while OpenAI analysis is optional.
+The Markdown report is also written to the workflow's **Summary** page. Missing and failed values remain `null`/`—`; they are never converted to zero. A deterministic report is always generated, while OpenAI analysis is optional. The Summary includes an explicit AI analysis status and states when the report used the rule-based fallback.
 
 Run it locally with yesterday's JST date:
 
@@ -111,7 +111,7 @@ date,installs,uninstalls,users,impressions,rating,reviews,acquisition_source
 ### Cost and safety controls
 
 - Cloudflare Web Analytics, GitHub Actions within account limits, and public Chrome Web Store reads add no new paid service.
-- OpenAI is capped to 1,200 output tokens per run in the workflow (2,000 hard cap in code).
+- OpenAI uses Structured Outputs with minimal reasoning effort and is capped to 4,000 output tokens per run (8,000 hard cap in code). The response must be `completed` before JSON is parsed.
 - X is disabled until the username, paid access, and spend limit are explicitly approved.
 - The workflow does not create Issues/PRs, merge, deploy, or publish X posts. It only prepares and reports recommended actions.
 - Re-running the same date overwrites that date's snapshot, making collection idempotent.

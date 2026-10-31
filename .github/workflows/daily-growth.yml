@@ -48,7 +48,8 @@ jobs:
           X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          OPENAI_MAX_OUTPUT_TOKENS: "1200"
+          OPENAI_MAX_OUTPUT_TOKENS: "4000"
+          OPENAI_REASONING_EFFORT: "minimal"
         run: |
           args=()
           if [ -n "$REPORT_DATE" ]; then
