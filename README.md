@@ -53,7 +53,7 @@ The site is published automatically after every push to `main`. No build action 
 
 ## Analytics
 
-Cloudflare Web Analytics is loaded once from `index.html` with the site token issued for `errrt.github.io`. The module script is placed before `</body>` so it does not block rendering or alter SEO metadata.
+Cloudflare Web Analytics is loaded once from `index.html` with the site token currently issued for `errrt.github.io`. The module script is placed before `</body>` so it does not block rendering or alter SEO metadata. Keep the public beacon token in the LP, redirect pages, and `growth-agent.json` identical whenever Cloudflare rotates or reissues it.
 
 PhraseCrate, Tab Parcel, GitHub, and X links use same-origin `/go/<key>/index.html` redirect pages. Those pages load the same Cloudflare beacon before forwarding to the external destination, so daily link clicks can be queried by `requestPath` without adding another analytics vendor. A destination that has not been confirmed remains disabled instead of being guessed.
 
@@ -64,7 +64,7 @@ GitHub Actions starts the report at 04:30 JST every day so it can finish before 
 - `growth-report-<run id>`: `snapshot.json` and the Japanese `report.md`
 - `growth-history`: rolling daily snapshots used for previous-day, 7-day, and 30-day comparisons
 
-The Markdown report is also written to the workflow's **Summary** page. Missing and failed values remain `null`/`—`; they are never converted to zero. A deterministic report is always generated, while OpenAI analysis is optional. The Summary includes an explicit AI analysis status and states when the report used the rule-based fallback.
+The Markdown report is also written to the workflow's **Summary** page. Missing and failed values remain `null`/`—`; they are never converted to zero. In particular, an empty Cloudflare GraphQL result is recorded as missing with the queried UTC window, not as zero traffic. A deterministic report is always generated, while OpenAI analysis is optional. The Summary includes an explicit AI analysis status and states when the report used the rule-based fallback.
 
 Run it locally with yesterday's JST date:
 
