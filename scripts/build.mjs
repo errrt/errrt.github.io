@@ -25,7 +25,7 @@ const requiredCopy = [
   "Tab Parcel",
   "Tiny Expander",
   "https://static.cloudflareinsights.com/beacon.min.js",
-  "1709ef2ee75e4ed88b82a65361e0588a",
+  "657f2e4fac22497e950b574f04ad4208",
 ];
 
 for (const copy of requiredCopy) {

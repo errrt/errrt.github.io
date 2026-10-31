@@ -6,7 +6,7 @@
 
 | 対象 | 公開URL / ID | 確認結果 |
 |---|---|---|
-| errrt LP | https://errrt.github.io/ | `errrt/errrt.github.io` のGitHub Pages。Cloudflare Web Analyticsの正式なSite Tag `1709ef2ee75e4ed88b82a65361e0588a`へ修正済み |
+| errrt LP | https://errrt.github.io/ | `errrt/errrt.github.io` のGitHub Pages。Cloudflare Web Analyticsの現行スニペットと同じSite Tagを使用 |
 | PhraseCrate | Chrome Web Store item `gngjinfejkkiflogppaadaandlenomcd` | LP設定から確認 |
 | Tab Parcel | Chrome Web Store item `pohjmphoidcblbneaeabbpjhcjjlbhke` | LP設定から確認 |
 | X | https://x.com/errrt0dev | 表示名`errrt`、ユーザー名`@errrt0dev`として確認。LPリンクとcollector設定へ反映済み |

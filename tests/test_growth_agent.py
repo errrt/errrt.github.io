@@ -94,6 +94,20 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["page_views"], 8)
         self.assertEqual(result["metrics"]["outbound_clicks"], {"phraseCrate": 2})
 
+    @patch("growth_agent.collectors.request_json")
+    def test_cloudflare_empty_response_is_missing_not_zero(self, request_json):
+        request_json.return_value = {"data": {"viewer": {"accounts": [{
+            "totals": [],
+            "referrers": [],
+            "paths": [],
+        }]}}}
+        with patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "token", "CLOUDFLARE_ACCOUNT_ID": "account"}):
+            result = collect_cloudflare({"site_tag": "site"}, date(2026, 10, 22), "Asia/Tokyo")
+        self.assertEqual(result["status"], "missing")
+        self.assertIsNone(result["metrics"])
+        self.assertIn("unknown, not a confirmed zero", result["error"])
+        self.assertEqual(result["query_window"]["start"], "2026-10-21T15:00:00Z")
+
     def test_public_store_listing_is_explicitly_partial(self):
         page = (
             '<a href="/category/extensions/productivity/tools">Tools</a>4 users</div>'

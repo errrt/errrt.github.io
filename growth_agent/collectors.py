@@ -65,6 +65,16 @@ def collect_cloudflare(config, report_date, timezone_name):
         if not accounts:
             raise RuntimeError("No Cloudflare account data returned")
         totals = accounts[0]["totals"]
+        if not totals:
+            return {
+                "status": "missing",
+                "error": (
+                    "Cloudflare returned no rows for "
+                    f"{start} to {end}; the result is unknown, not a confirmed zero"
+                ),
+                "metrics": None,
+                "query_window": {"start": start, "end": end},
+            }
         raw_page_views = sum(row.get("count", 0) for row in totals)
         visits = sum(row.get("sum", {}).get("visits", 0) for row in totals)
         referrers = [
@@ -77,7 +87,7 @@ def collect_cloudflare(config, report_date, timezone_name):
             if len(path_parts) >= 2 and path_parts[0] == "go":
                 outbound_clicks[path_parts[1]] = outbound_clicks.get(path_parts[1], 0) + row.get("count", 0)
         page_views = max(raw_page_views - sum(outbound_clicks.values()), 0)
-        return {"status": "ok", "error": None, "metrics": {
+        return {"status": "ok", "error": None, "query_window": {"start": start, "end": end}, "metrics": {
             "page_views": page_views, "raw_page_views": raw_page_views, "visits": visits,
             "unique_users": None, "referrers": referrers, "outbound_clicks": outbound_clicks,
         }}
