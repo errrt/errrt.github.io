@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .ai import analyze
+from .ai import analyze, log_line
 from .collectors import collect_chrome_web_store, collect_cloudflare, collect_github, collect_x
 from .report import build_actions, load_history, render
 
@@ -37,6 +37,7 @@ def main():
         },
     }
     snapshot["analysis"] = analyze(snapshot, history)
+    print(log_line(snapshot["analysis"]))
     snapshot["actions"] = build_actions(snapshot, history)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.history_dir.mkdir(parents=True, exist_ok=True)

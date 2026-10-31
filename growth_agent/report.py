@@ -235,8 +235,24 @@ def render(snapshot, history):
     if snapshot["sources"]["x"].get("status") != "ok":
         lines.append("- 計測上の制約: X投稿指標が欠損しており、投稿→LP流入の寄与を分離できない。")
 
-    lines += ["", "## 重要な発見", ""]
     analysis = snapshot.get("analysis", {})
+    diagnostics = analysis.get("diagnostics") or {}
+    usage = diagnostics.get("usage") or {}
+    lines += ["", "## AI分析状態", ""]
+    if analysis.get("status") == "ok":
+        lines.append(
+            f"- 成功（Structured Outputs / model: `{diagnostics.get('model') or '不明'}` / "
+            f"response: `{diagnostics.get('response_id') or '不明'}` / input tokens: {_fmt(usage.get('input_tokens'))} / "
+            f"output tokens: {_fmt(usage.get('output_tokens'))}）"
+        )
+    else:
+        lines.append(
+            "- 失敗または未設定のため、ルールベース分析へフォールバックしました。"
+            f"状態: `{analysis.get('status', 'unknown')}` / API状態: `{diagnostics.get('response_status') or '不明'}` / "
+            f"理由: {_one_line(analysis.get('error'))}"
+        )
+
+    lines += ["", "## 重要な発見", ""]
     if analysis.get("status") == "ok":
         result = analysis["result"]
         lines += [f"**AI要約:** {result['summary']}", "", "観測事実:", ""]
@@ -246,7 +262,7 @@ def render(snapshot, history):
         lines += ["", "成長機会:", ""]
         lines.extend(f"- {item}" for item in result["opportunities"])
     else:
-        lines.append("- AI分析は未実行。上記のKPI・流入・ボトルネックは決定論的に生成しています。")
+        lines.append("- AI分析は利用できませんでした。上記のKPI・流入・ボトルネックはルールベースで生成しています。")
 
     lines += ["", "## 前日の施策と結果", ""]
     previous_actions = history[-1].get("actions", []) if history else []
