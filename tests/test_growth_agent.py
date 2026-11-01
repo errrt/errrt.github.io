@@ -8,6 +8,8 @@ import os
 from growth_agent.ai import analyze, log_line
 from growth_agent.report import build_actions, render
 from growth_agent.collectors import (
+    _cws_url,
+    _period,
     _utc_range,
     collect_chrome_web_store,
     collect_cloudflare,
@@ -87,9 +89,9 @@ class ReportTests(unittest.TestCase):
             "metrics": {
                 "installs": None, "page_views": None,
                 "periods": {
-                    "1d": {key: {"value": None, "state": "missing", "observed_days": 0, "expected_days": 1} for key in ("installs", "uninstalls", "impressions", "page_views")},
+                    "1d": {key: {"value": None, "state": "pending", "observed_days": 0, "expected_days": 1} for key in ("installs", "uninstalls", "impressions", "page_views")},
                     "7d": {key: {"value": 7, "state": "partial", "observed_days": 5, "expected_days": 7} for key in ("installs", "uninstalls", "impressions", "page_views")},
-                    "30d": {key: {"value": 30, "state": "complete", "observed_days": 30, "expected_days": 30} for key in ("installs", "uninstalls", "impressions", "page_views")},
+                    "30d": {key: {"value": 30, "state": "observed", "observed_days": 30, "expected_days": 30} for key in ("installs", "uninstalls", "impressions", "page_views")},
                 },
                 "conversion_rate": {"1d": None, "7d": None, "30d": 0.1},
                 "active_users": {
@@ -113,6 +115,7 @@ class ReportTests(unittest.TestCase):
         report = render(snapshot, [])
         self.assertIn("### Chrome Web Store公式Metrics", report)
         self.assertIn("インストール数／ストアPV（参考比率）", report)
+        self.assertIn("| 1d | — (pending) |", report)
         self.assertIn("7 (5/7日)", report)
         self.assertIn("10.0%", report)
         self.assertIn("Daily active users: 4 (2026-10-21)", report)
@@ -124,6 +127,28 @@ class ReportTests(unittest.TestCase):
         start, end = _utc_range(date(2026, 10, 22), "Asia/Tokyo")
         self.assertEqual(start, "2026-10-21T15:00:00Z")
         self.assertEqual(end, "2026-10-22T15:00:00Z")
+
+    def test_cws_utm_source_query_uses_page_views_only(self):
+        url = _cws_url(
+            "publisher", "item", date(2026, 10, 1), date(2026, 10, 30),
+            ("page-views",), "utm-source",
+        )
+        self.assertIn("metrics=page-views", url)
+        self.assertIn("dimensions=utm-source", url)
+        self.assertNotIn("metrics=installs", url)
+
+    def test_pending_daily_state_is_preserved_in_one_day_period(self):
+        daily = {"2026-10-22": {
+            "installs": None, "uninstalls": None, "impressions": None, "page_views": None,
+            "metric_states": {
+                "installs": "pending", "uninstalls": "pending",
+                "impressions": "pending", "page_views": "pending",
+            },
+        }}
+        period = _period(daily, date(2026, 10, 22), 1)
+        self.assertEqual(period["installs"]["state"], "pending")
+        self.assertEqual(period["installs"]["pending_days"], 1)
+        self.assertIsNone(period["installs"]["value"])
 
     @patch("growth_agent.collectors.request_json")
     def test_cloudflare_separates_outbound_clicks_from_lp_views(self, request_json):
@@ -174,7 +199,11 @@ class ReportTests(unittest.TestCase):
                 "dimensionValues": ["organic"],
                 "metricValues": [{"metric": "installs", "value": "2"}],
             }]},
-            {"metricRows": []},
+            {"metricRows": [{
+                "date": {"year": 2026, "month": 10, "day": 21},
+                "dimensionValues": ["newsletter"],
+                "metricValues": [{"metric": "page-views", "value": "5"}],
+            }]},
         ]
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict(os.environ, {"CWS_ACCESS_TOKEN": "token", "CWS_PUBLISHER_ID": "publisher"}):
@@ -189,16 +218,49 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(metrics["daily"]["2026-10-20"]["uninstalls"])
         self.assertEqual(metrics["daily"]["2026-10-20"]["metric_states"]["uninstalls"], "missing")
         self.assertEqual(metrics["daily"]["2026-10-22"]["metric_states"]["installs"], "pending")
+        self.assertEqual(metrics["periods"]["1d"]["installs"]["state"], "pending")
         self.assertEqual(metrics["periods"]["30d"]["installs"]["value"], 2)
         self.assertEqual(metrics["periods"]["30d"]["installs"]["observed_days"], 2)
         self.assertIsNone(metrics["periods"]["30d"]["uninstalls"]["value"])
         self.assertEqual(metrics["periods"]["30d"]["uninstalls"]["observed_days"], 0)
         self.assertEqual(metrics["source_breakdown_30d"]["install_source"]["values"]["organic"]["installs"], 2)
         self.assertEqual(metrics["source_breakdown_30d"]["install_source"]["observed_days"], 1)
+        self.assertEqual(metrics["source_breakdown_30d"]["utm_source"]["values"]["newsletter"]["page_views"], 5)
         self.assertEqual(len(raw["base"]), 2)
         self.assertIn("2026-10-21", normalized["daily"])
         self.assertIn("pageToken=next", request_json.call_args_list[1].args[0])
+        install_source_url = request_json.call_args_list[2].args[0]
+        utm_source_url = request_json.call_args_list[3].args[0]
+        self.assertIn("metrics=installs", install_source_url)
+        self.assertIn("dimensions=install-source", install_source_url)
+        self.assertNotIn("page-views", install_source_url)
+        self.assertIn("metrics=page-views", utm_source_url)
+        self.assertIn("dimensions=utm-source", utm_source_url)
+        self.assertNotIn("metrics=installs", utm_source_url)
         self.assertNotIn("token", json.dumps(raw))
+
+    @patch("growth_agent.collectors.request_json")
+    def test_cws_dimension_failure_is_failed_not_zero(self, request_json):
+        config = {"products": [{"slug": "phrasecrate", "item_id": "item"}]}
+        request_json.side_effect = [
+            {"metricRows": [{
+                "date": {"year": 2026, "month": 10, "day": 21},
+                "metricValues": [{"metric": "installs", "value": "1"}],
+            }]},
+            {"metricRows": []},
+            RuntimeError("UTM API unavailable"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"CWS_ACCESS_TOKEN": "token", "CWS_PUBLISHER_ID": "publisher"}):
+                result = collect_chrome_web_store(
+                    config, date(2026, 10, 22), Path(directory), Path(directory) / "history"
+                )
+        source = result["phrasecrate"]
+        utm = source["metrics"]["source_breakdown_30d"]["utm_source"]
+        self.assertEqual(source["status"], "partial")
+        self.assertEqual(utm["state"], "failed")
+        self.assertIsNone(utm["values"])
+        self.assertIn("UTM API unavailable", utm["error"])
 
     @patch("growth_agent.collectors.request_json")
     def test_cws_requery_updates_delayed_data_across_report_dates(self, request_json):
@@ -390,6 +452,32 @@ class AIAnalysisTests(unittest.TestCase):
         self.assertIn("status=incomplete", analysis["error"])
         self.assertIn("reason=max_output_tokens", analysis["error"])
         self.assertNotIn("途中", analysis["error"])
+
+    @patch("growth_agent.ai.request_json")
+    def test_ai_context_describes_current_cws_pipeline(self, request_json):
+        result_json = {
+            "summary": "要約", "observations": ["観測"],
+            "hypotheses": ["仮説"], "opportunities": ["機会"],
+        }
+        request_json.return_value = self._completed_payload(json.dumps(result_json, ensure_ascii=False))
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini"}):
+            analysis = analyze({"sources": {}}, [])
+        self.assertEqual(analysis["status"], "ok")
+        body = request_json.call_args.kwargs["body"]
+        context = json.loads(body["input"])
+        contract = context["data_contract"]["chrome_web_store"]
+        self.assertIn("API v2", contract["primary_source"])
+        self.assertIn("Fallback only", contract["csv_role"])
+        self.assertIn("Removed", contract["public_listing_scraping"])
+        self.assertIn("observed_days/expected_days", contract["partial_periods"])
+        self.assertIn("never numeric zero", contract["missing_values"])
+        self.assertIn("active-user metrics", contract["active_users"])
+        self.assertIn("do not recommend", contract["recommendation_guard"])
+        self.assertIn("Do not estimate churn, retention, conversion", contract["inference_guard"])
+        self.assertIn("Never compare or divide installs by users/users-7d", contract["inference_guard"])
+        self.assertIn("data_contract", body["instructions"])
+        self.assertIn("古いhistory", body["instructions"])
+        self.assertIn("installsとusers/users-7dを直接比較", body["instructions"])
 
     @patch("growth_agent.ai.request_json")
     def test_json_failure_logs_metadata_without_response_content(self, request_json):

@@ -201,13 +201,28 @@ def _period(daily, last_date, days):
     selected = [(last_date - timedelta(days=offset)).isoformat() for offset in range(days)]
     output = {}
     for metric in ("installs", "uninstalls", "impressions", "page_views"):
-        observed = [day for day in selected if daily.get(day, {}).get("metric_states", {}).get(metric) == "observed"]
+        states = [daily.get(day, {}).get("metric_states", {}).get(metric, "missing") for day in selected]
+        observed = [day for day, state in zip(selected, states) if state == "observed"]
         values = [daily[day][metric] for day in observed if daily[day].get(metric) is not None]
+        state_counts = {state: states.count(state) for state in ("observed", "pending", "missing", "failed")}
+        if state_counts["observed"] == days:
+            aggregate_state = "observed"
+        elif state_counts["observed"]:
+            aggregate_state = "partial"
+        elif state_counts["failed"]:
+            aggregate_state = "failed"
+        elif state_counts["pending"]:
+            aggregate_state = "pending"
+        else:
+            aggregate_state = "missing"
         output[metric] = {
             "value": sum(values) if values else None,
-            "state": "complete" if len(observed) == days else ("partial" if observed else "missing"),
+            "state": aggregate_state,
             "observed_days": len(observed),
             "expected_days": days,
+            "pending_days": state_counts["pending"],
+            "missing_days": state_counts["missing"],
+            "failed_days": state_counts["failed"],
         }
     return output
 
@@ -237,12 +252,12 @@ def _latest_active(daily, metric, last_date):
 def _conversion(period):
     installs = period["installs"]
     page_views = period["page_views"]
-    if installs["state"] != "complete" or page_views["state"] != "complete" or not page_views["value"]:
+    if installs["state"] != "observed" or page_views["state"] != "observed" or not page_views["value"]:
         return None
     return installs["value"] / page_views["value"]
 
 
-def _source_summary(daily, last_date, days, field):
+def _source_summary(daily, last_date, days, field, error=None):
     totals = {}
     observed_days = 0
     for offset in range(days):
@@ -256,13 +271,15 @@ def _source_summary(daily, last_date, days, field):
                     target[metric] = target.get(metric, 0) + value
     return {
         "values": totals or None,
-        "state": "complete" if observed_days == days else ("partial" if observed_days else "missing"),
+        "state": "observed" if observed_days == days else ("partial" if observed_days else ("failed" if error else "missing")),
         "observed_days": observed_days,
         "expected_days": days,
+        "error": error,
     }
 
 
-def _cws_metrics(daily, report_date, data_source, fetched_at, limitations=None):
+def _cws_metrics(daily, report_date, data_source, fetched_at, limitations=None, dimension_errors=None):
+    dimension_errors = dimension_errors or {}
     periods = {label: _period(daily, report_date, days) for label, days in (("1d", 1), ("7d", 7), ("30d", 30))}
     day = daily.get(report_date.isoformat(), _empty_day())
     return {
@@ -278,8 +295,12 @@ def _cws_metrics(daily, report_date, data_source, fetched_at, limitations=None):
         "install_sources": day.get("install_sources"),
         "utm_sources": day.get("utm_sources"),
         "source_breakdown_30d": {
-            "install_source": _source_summary(daily, report_date, 30, "install_sources"),
-            "utm_source": _source_summary(daily, report_date, 30, "utm_sources"),
+            "install_source": _source_summary(
+                daily, report_date, 30, "install_sources", dimension_errors.get("install-source")
+            ),
+            "utm_source": _source_summary(
+                daily, report_date, 30, "utm_sources", dimension_errors.get("utm-source")
+            ),
         },
         "data_source": data_source,
         "last_updated_at": fetched_at,
@@ -350,14 +371,14 @@ def collect_chrome_web_store(config, report_date, imports_dir, storage_dir=None,
                     publisher_id, product["item_id"], first_date, report_date, CWS_METRICS, token
                 )
                 dimension_pages = {}
-                dimension_errors = []
-                for dimension, metrics in (("install-source", ("installs",)), ("utm-source", ("installs", "page-views"))):
+                dimension_errors = {}
+                for dimension, metrics in (("install-source", ("installs",)), ("utm-source", ("page-views",))):
                     try:
                         dimension_pages[dimension] = _cws_query_pages(
                             publisher_id, product["item_id"], first_date, report_date, metrics, token, dimension
                         )
                     except Exception as error:
-                        dimension_errors.append(f"{dimension}: {error}")
+                        dimension_errors[dimension] = str(error)
                 daily = _normalize_cws_pages(base_pages, dimension_pages, first_date, report_date)
                 raw = {
                     "product": slug,
@@ -370,10 +391,13 @@ def collect_chrome_web_store(config, report_date, imports_dir, storage_dir=None,
                 }
                 _save_cws_data(storage_dir, slug, report_date, raw, daily, fetched_at)
                 limitations = (
-                    "Dimension queries were unavailable: " + "; ".join(dimension_errors)
+                    "Dimension queries were unavailable: "
+                    + "; ".join(f"{dimension}: {error}" for dimension, error in dimension_errors.items())
                     if dimension_errors else None
                 )
-                metrics = _cws_metrics(daily, report_date, "chrome_web_store_api_v2", fetched_at, limitations)
+                metrics = _cws_metrics(
+                    daily, report_date, "chrome_web_store_api_v2", fetched_at, limitations, dimension_errors
+                )
                 results[slug] = {"status": "partial" if dimension_errors else "ok", "error": limitations, "metrics": metrics}
                 continue
             except Exception as error:

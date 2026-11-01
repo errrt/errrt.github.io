@@ -54,8 +54,8 @@ def _comparison(label, current, values):
 def _period_cell(source, period, metric):
     value = (((source.get("metrics") or {}).get("periods") or {}).get(period) or {}).get(metric) or {}
     if value.get("value") is None:
-        return "—"
-    coverage = "" if value.get("state") == "complete" else f" ({value.get('observed_days', 0)}/{value.get('expected_days', 0)}日)"
+        return f"— ({value.get('state', 'missing')})"
+    coverage = "" if value.get("state") == "observed" else f" ({value.get('observed_days', 0)}/{value.get('expected_days', 0)}日)"
     return f"{_fmt(value['value'])}{coverage}"
 
 

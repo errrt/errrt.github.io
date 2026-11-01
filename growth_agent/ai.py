@@ -108,13 +108,37 @@ def analyze(snapshot, history):
             "diagnostics": {},
         }
 
-    context = {"today": snapshot, "history": history[-30:]}
+    context = {
+        "data_contract": {
+            "chrome_web_store": {
+                "primary_source": "Chrome Web Store API v2 queryMetrics (official)",
+                "csv_role": "Fallback only when the official API request fails",
+                "public_listing_scraping": "Removed; no public store page scraping is used",
+                "partial_periods": "Use observed_days/expected_days and never present partial totals as complete periods",
+                "missing_values": "null/missing/pending/failed are unknown states, never numeric zero",
+                "active_users": "users and users-7d are active-user metrics, not total installed users",
+                "recommendation_guard": (
+                    "When data_source is chrome_web_store_api_v2 and collection status is ok/partial, do not recommend "
+                    "CSV import, API reconnection, authentication reconfiguration, or public listing scraping"
+                ),
+                "inference_guard": (
+                    "Do not estimate churn, retention, conversion, or causal effects unless comparable observed metrics "
+                    "directly support it. Never compare or divide installs by users/users-7d to calculate retention; "
+                    "these metrics have different definitions and populations"
+                ),
+            }
+        },
+        "today": snapshot,
+        "history": history[-30:],
+    }
     body = {
         "model": model,
         "instructions": (
             "個人開発アプリの日次成長snapshotを日本語で分析してください。観測事実と仮説を明確に分離し、"
             "欠損をゼロとして扱わず、因果関係を断定しないでください。各配列は重要度順に最大3件、"
-            "各項目は簡潔にしてください。"
+            "各項目は簡潔にしてください。入力のdata_contractを現在の実装仕様として必ず優先し、"
+            "古いhistoryに残る過去の収集方式や改善提案を現在も必要なものとして扱わないでください。"
+            "installsとusers/users-7dを直接比較して継続率や離脱率を算出しないでください。"
         ),
         "input": json.dumps(context, ensure_ascii=False),
         "max_output_tokens": _max_output_tokens(),

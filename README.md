@@ -108,6 +108,8 @@ The collector uses this order:
 
 Every run re-queries the preceding 30 dates so delayed data can replace earlier pending values. Raw API responses and normalized daily rows are saved under `growth-history/chrome-web-store/` and copied into the report artifact. A returned numeric zero is stored as `observed`; absent metrics are `null` with `missing`, and dates after the latest returned API row are `pending`. The API exposes no explicit finalization flag, so `pending` is an agent-side state, not a Google guarantee.
 
+Dimension queries are intentionally separate: `install-source` is queried with `installs`, while `utm-source` is queried with `page-views`. A dimension request failure is recorded as `failed` with a null value and never converted to zero.
+
 The CSV fallback accepts:
 
 ```csv
