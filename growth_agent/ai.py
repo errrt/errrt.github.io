@@ -81,23 +81,41 @@ def _validate_result(result):
             raise ValueError(f"Structured output {key} contained a non-string item")
 
 
-def _cws_api_healthy(snapshot):
+def _healthy_cws_products(snapshot):
     stores = (snapshot.get("sources") or {}).get("chrome_web_store") or {}
-    return bool(stores) and all(
-        source.get("status") == "ok"
+    return {
+        product
+        for product, source in stores.items()
+        if source.get("status") in ("ok", "partial")
         and (source.get("metrics") or {}).get("data_source") == "chrome_web_store_api_v2"
-        for source in stores.values()
-    )
+    }
+
+
+def _cws_api_healthy(snapshot):
+    return bool(_healthy_cws_products(snapshot))
 
 
 def _contains_any(text, phrases):
     return any(phrase in text for phrase in phrases)
 
 
-def _content_issue(text, api_healthy):
-    if not api_healthy:
+def _mentioned_cws_products(text, products):
+    normalized = " ".join(text.lower().split())
+    mentioned = set()
+    for product in products:
+        aliases = {product.lower(), product.lower().replace("-", " "), product.lower().replace("-", "")}
+        if any(alias in normalized for alias in aliases):
+            mentioned.add(product)
+    return mentioned
+
+
+def _content_issue(text, healthy_products, all_products):
+    if not healthy_products:
         return None
     normalized = " ".join(text.lower().split())
+    mentioned = _mentioned_cws_products(normalized, all_products)
+    if mentioned and mentioned.isdisjoint(healthy_products):
+        return None
 
     csv_action = "csv" in normalized and _contains_any(normalized, (
         "定期取得", "定期的に取得", "アップロード", "投入", "インポート",
@@ -154,13 +172,21 @@ def _content_issue(text, api_healthy):
 
 
 def _validate_content(result, snapshot):
+    stores = (snapshot.get("sources") or {}).get("chrome_web_store") or {}
+    all_products = set(stores)
+    healthy_products = _healthy_cws_products(snapshot)
     api_healthy = _cws_api_healthy(snapshot)
     if not api_healthy:
-        return result, {"status": "not_applicable", "api_v2_healthy": False, "removed_count": 0}
+        return result, {
+            "status": "not_applicable",
+            "api_v2_healthy": False,
+            "healthy_products": [],
+            "removed_count": 0,
+        }
 
     sanitized = {key: (list(value) if isinstance(value, list) else value) for key, value in result.items()}
     removed = []
-    summary_issue = _content_issue(sanitized["summary"], api_healthy)
+    summary_issue = _content_issue(sanitized["summary"], healthy_products, all_products)
     if summary_issue:
         sanitized["summary"] = SAFE_CONTENT["summary"]
         removed.append({"field": "summary", "reason": summary_issue})
@@ -169,7 +195,7 @@ def _validate_content(result, snapshot):
     for field in ("observations", "hypotheses", "opportunities"):
         kept = []
         for item in sanitized[field]:
-            issue = _content_issue(item, api_healthy)
+            issue = _content_issue(item, healthy_products, all_products)
             if issue:
                 removed.append({"field": field, "reason": issue})
             else:
@@ -183,6 +209,7 @@ def _validate_content(result, snapshot):
     return sanitized, {
         "status": "sanitized" if removed else "passed",
         "api_v2_healthy": True,
+        "healthy_products": sorted(healthy_products),
         "removed_count": len(removed),
         "removed": removed,
         "fallback_fields": fallback_fields,

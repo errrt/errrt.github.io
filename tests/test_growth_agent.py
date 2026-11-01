@@ -389,6 +389,20 @@ class AIAnalysisTests(unittest.TestCase):
             "tab-parcel": store,
         }}}
 
+    def _mixed_cws_snapshot(self):
+        return {"sources": {"chrome_web_store": {
+            "phrasecrate": {
+                "status": "partial",
+                "error": "utm-source dimension failed",
+                "metrics": {"data_source": "chrome_web_store_api_v2"},
+            },
+            "tab-parcel": {
+                "status": "partial",
+                "error": "Official API failed; using CSV fallback",
+                "metrics": {"data_source": "official_csv"},
+            },
+        }}}
+
     def _completed_payload(self, text):
         return {
             "id": "resp_test",
@@ -556,6 +570,83 @@ class AIAnalysisTests(unittest.TestCase):
         self.assertEqual(healthy["diagnostics"]["content_validation"]["status"], "passed")
         self.assertEqual(failed["result"]["opportunities"], [failed_text])
         self.assertEqual(failed["diagnostics"]["content_validation"]["status"], "not_applicable")
+
+    @patch("growth_agent.ai.request_json")
+    def test_partial_official_api_data_enables_content_validation(self, request_json):
+        invalid = "Tab Parcelのanalytics CSVを定期取得して投入する。"
+        valid = "Tab Parcelの公式API v2で取得できた基本指標を継続して評価する。"
+        result_json = {
+            "summary": "分析", "observations": ["観測"], "hypotheses": ["仮説"],
+            "opportunities": [invalid, valid],
+        }
+        snapshot = self._cws_snapshot()
+        snapshot["sources"]["chrome_web_store"]["tab-parcel"] = {
+            "status": "partial",
+            "error": "utm-source dimension failed",
+            "metrics": {"data_source": "chrome_web_store_api_v2"},
+        }
+        request_json.return_value = self._completed_payload(json.dumps(result_json, ensure_ascii=False))
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini"}):
+            analysis = analyze(snapshot, [])
+
+        self.assertEqual(analysis["result"]["opportunities"], [valid])
+        validation = analysis["diagnostics"]["content_validation"]
+        self.assertEqual(validation["status"], "sanitized")
+        self.assertEqual(validation["healthy_products"], ["phrasecrate", "tab-parcel"])
+
+    @patch("growth_agent.ai.request_json")
+    def test_mixed_product_states_only_protect_official_api_product(self, request_json):
+        phrasecrate_csv = "PhraseCrateのanalytics CSVを定期取得して投入する。"
+        phrasecrate_scraping = "PhraseCrateの公開ストアページのスクレイピングを再開して取得する。"
+        phrasecrate_auth = "PhraseCrateのChrome Web Store API認証再設定を行う。"
+        tab_parcel_fallback = "Tab ParcelはAPI障害時にCSVをフォールバックとして投入する。"
+        result_json = {
+            "summary": "分析", "observations": ["観測"], "hypotheses": ["仮説"],
+            "opportunities": [phrasecrate_csv, phrasecrate_scraping, phrasecrate_auth],
+        }
+        fallback_result = {
+            **result_json,
+            "opportunities": [phrasecrate_csv, tab_parcel_fallback],
+        }
+        request_json.side_effect = [
+            self._completed_payload(json.dumps(result_json, ensure_ascii=False)),
+            self._completed_payload(json.dumps(fallback_result, ensure_ascii=False)),
+        ]
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini"}):
+            sanitized = analyze(self._mixed_cws_snapshot(), [])
+            fallback = analyze(self._mixed_cws_snapshot(), [])
+
+        self.assertEqual(sanitized["diagnostics"]["content_validation"]["healthy_products"], ["phrasecrate"])
+        self.assertEqual(
+            {item["reason"] for item in sanitized["diagnostics"]["content_validation"]["removed"]},
+            {"unnecessary_csv_workflow", "public_listing_scraping", "unnecessary_api_reconfiguration"},
+        )
+        self.assertNotIn(phrasecrate_csv, fallback["result"]["opportunities"])
+        self.assertEqual(fallback["result"]["opportunities"], [tab_parcel_fallback])
+
+    @patch("growth_agent.ai.request_json")
+    def test_csv_fallback_only_does_not_enable_api_content_validation(self, request_json):
+        csv_action = "Chrome Web Storeのanalytics CSVを定期取得して投入する。"
+        result_json = {
+            "summary": "分析", "observations": ["観測"], "hypotheses": ["仮説"],
+            "opportunities": [csv_action],
+        }
+        fallback_store = {
+            "status": "partial",
+            "error": "Official API failed; using CSV fallback",
+            "metrics": {"data_source": "official_csv"},
+        }
+        snapshot = {"sources": {"chrome_web_store": {
+            "phrasecrate": fallback_store,
+            "tab-parcel": fallback_store,
+        }}}
+        request_json.return_value = self._completed_payload(json.dumps(result_json, ensure_ascii=False))
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini"}):
+            analysis = analyze(snapshot, [])
+
+        self.assertEqual(analysis["result"]["opportunities"], [csv_action])
+        self.assertEqual(analysis["diagnostics"]["content_validation"]["status"], "not_applicable")
+        self.assertEqual(analysis["diagnostics"]["content_validation"]["healthy_products"], [])
 
     @patch("growth_agent.ai.request_json")
     def test_scraping_and_unnecessary_cws_reauthentication_are_removed(self, request_json):
