@@ -292,6 +292,13 @@ def render(snapshot, history):
             f"response: `{diagnostics.get('response_id') or '不明'}` / input tokens: {_fmt(usage.get('input_tokens'))} / "
             f"output tokens: {_fmt(usage.get('output_tokens'))}）"
         )
+        content_validation = diagnostics.get("content_validation") or {}
+        if content_validation.get("status") == "sanitized":
+            reasons = sorted({item.get("reason", "unknown") for item in content_validation.get("removed", [])})
+            lines.append(
+                f"- 内容検証: 不適切なAI項目を{content_validation.get('removed_count', 0)}件除外しました。"
+                f"理由: {', '.join(reasons) or 'unknown'}"
+            )
     else:
         lines.append(
             "- 失敗または未設定のため、ルールベース分析へフォールバックしました。"
