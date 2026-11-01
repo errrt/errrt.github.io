@@ -6,6 +6,7 @@ import json
 import os
 
 from growth_agent.ai import analyze, log_line
+from growth_agent.metrics import CWS_ACTIVE_USER_DEFINITIONS
 from growth_agent.report import build_actions, render
 from growth_agent.collectors import (
     _cws_url,
@@ -119,6 +120,8 @@ class ReportTests(unittest.TestCase):
         self.assertIn("7 (5/7日)", report)
         self.assertIn("10.0%", report)
         self.assertIn("Daily active users: 4 (2026-10-21)", report)
+        self.assertIn(CWS_ACTIVE_USER_DEFINITIONS["users"]["description"], report)
+        self.assertIn(CWS_ACTIVE_USER_DEFINITIONS["users_7d"]["description"], report)
         self.assertIn("10-21:4", report)
         self.assertIn("install-source（30日、取得 2/30日、状態: partial）", report)
         self.assertIn("UTM source（30日、取得 0/30日、状態: missing）", report)
@@ -496,7 +499,10 @@ class AIAnalysisTests(unittest.TestCase):
         self.assertIn("Removed", contract["public_listing_scraping"])
         self.assertIn("observed_days/expected_days", contract["partial_periods"])
         self.assertIn("never numeric zero", contract["missing_values"])
-        self.assertIn("active-user metrics", contract["active_users"])
+        self.assertEqual(contract["active_users"], {
+            definition["api_metric"]: definition["description"]
+            for definition in CWS_ACTIVE_USER_DEFINITIONS.values()
+        })
         self.assertIn("do not recommend", contract["recommendation_guard"])
         self.assertIn("Do not estimate churn, retention, conversion", contract["inference_guard"])
         self.assertIn("Never compare or divide installs by users/users-7d", contract["inference_guard"])
@@ -538,6 +544,74 @@ class AIAnalysisTests(unittest.TestCase):
         self.assertIn("users_misclassified_as_public_listing", {
             item["reason"] for item in analysis["diagnostics"]["content_validation"]["removed"]
         })
+
+    @patch("growth_agent.ai.request_json")
+    def test_actual_public_user_count_misclassification_is_removed(self, request_json):
+        invalid = (
+            "Chrome Web Storeの公開ユーザー数や部分的なinstalls観測は、APIの遅延やpartial観測日の不足"
+            "（observed_days < expected_days）による部分集計であり、未観測日をゼロとして扱うべきではない可能性がある。"
+        )
+        valid = "users/users-7dは公式API v2のアクティブユーザー指標であり、欠損日はゼロではない。"
+        result_json = {
+            "summary": "公式APIを分析した。", "observations": ["観測は正常。"],
+            "hypotheses": [invalid, valid], "opportunities": ["取得を継続する。"],
+        }
+        request_json.return_value = self._completed_payload(json.dumps(result_json, ensure_ascii=False))
+        snapshot = self._cws_snapshot()
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini"}):
+            analysis = analyze(snapshot, [])
+
+        self.assertEqual(analysis["result"]["hypotheses"], [valid])
+        self.assertEqual(analysis["diagnostics"]["content_validation"]["removed"], [{
+            "field": "hypotheses", "reason": "users_misclassified_as_public_listing",
+        }])
+        snapshot["sources"].update({
+            "cloudflare": {"status": "missing", "error": "not configured", "metrics": None},
+            "x": {"status": "missing", "error": "not configured", "metrics": None},
+            "github": {"status": "ok", "error": None, "metrics": {}},
+        })
+        snapshot.update({"date": "2026-10-31", "analysis": analysis, "actions": []})
+        report = render(snapshot, [])
+        self.assertNotIn(invalid, report)
+        self.assertIn(valid, report)
+
+    @patch("growth_agent.ai.request_json")
+    def test_public_user_wording_variants_are_removed(self, request_json):
+        invalid = [
+            "公開ユーザー数が増加した。",
+            "公開利用者数は5人だった。",
+            "公開アクティブユーザー数が前日を上回った。",
+        ]
+        result_json = {
+            "summary": "公式APIを分析した。", "observations": invalid,
+            "hypotheses": ["原因は断定しない。"], "opportunities": ["取得を継続する。"],
+        }
+        request_json.return_value = self._completed_payload(json.dumps(result_json, ensure_ascii=False))
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini"}):
+            analysis = analyze(self._cws_snapshot(), [])
+
+        self.assertEqual(analysis["result"]["observations"], [
+            "Chrome Web Store指標は公式API v2の取得状態とobserved_days/expected_daysに基づき評価します。"
+        ])
+        self.assertEqual(analysis["diagnostics"]["content_validation"]["removed_count"], 3)
+
+    @patch("growth_agent.ai.request_json")
+    def test_correct_public_user_negations_are_preserved(self, request_json):
+        valid = [
+            "users/users-7dは公開ユーザー数ではなく、公式API v2のアクティブユーザー指標である。",
+            "アクティブユーザーは公開ストアページの表示人数ではありません。",
+            "公開されているAPI仕様に従いusersを取得した。",
+        ]
+        result_json = {
+            "summary": "公式APIを分析した。", "observations": valid,
+            "hypotheses": ["原因は断定しない。"], "opportunities": ["取得を継続する。"],
+        }
+        request_json.return_value = self._completed_payload(json.dumps(result_json, ensure_ascii=False))
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini"}):
+            analysis = analyze(self._cws_snapshot(), [])
+
+        self.assertEqual(analysis["result"]["observations"], valid)
+        self.assertEqual(analysis["diagnostics"]["content_validation"]["status"], "passed")
 
     @patch("growth_agent.ai.request_json")
     def test_unsupported_retention_calculation_is_removed(self, request_json):

@@ -1,6 +1,8 @@
 import hashlib
 import json
 
+from .metrics import CWS_ACTIVE_USER_DEFINITIONS
+
 
 def _metric(source, key):
     if not source or source.get("status") not in ("ok", "partial"):
@@ -204,8 +206,10 @@ def render(snapshot, history):
             )
         lines += [
             "",
-            f"- Daily active users: {_active_cell(source, 'users')}（総インストールユーザー数ではありません）",
-            f"- 7-day active users: {_active_cell(source, 'users_7d')}（総インストールユーザー数ではありません）",
+            f"- {CWS_ACTIVE_USER_DEFINITIONS['users']['label']}: {_active_cell(source, 'users')}"
+            f"（{CWS_ACTIVE_USER_DEFINITIONS['users']['description']}）",
+            f"- {CWS_ACTIVE_USER_DEFINITIONS['users_7d']['label']}: {_active_cell(source, 'users_7d')}"
+            f"（{CWS_ACTIVE_USER_DEFINITIONS['users_7d']['description']}）",
             f"- Active users推移（取得済み直近7日）: {_active_trend(source, 'users')}",
             f"- 取得元: `{_metric(source, 'data_source') or '—'}` / 最終取得: {_metric(source, 'last_updated_at') or '—'}",
         ]

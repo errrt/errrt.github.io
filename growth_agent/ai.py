@@ -2,6 +2,13 @@ import json
 import os
 
 from .http import request_json
+from .metrics import (
+    CWS_ACTIVE_USER_DEFINITIONS,
+    CWS_ACTIVE_USER_TERMS,
+    CWS_PUBLIC_DISPLAY_CONTEXT,
+    CWS_PUBLIC_USER_CLAIMS,
+    CWS_PUBLIC_USER_NEGATIONS,
+)
 
 
 ANALYSIS_SCHEMA = {
@@ -99,6 +106,23 @@ def _contains_any(text, phrases):
     return any(phrase in text for phrase in phrases)
 
 
+def _claim_is_negated(text, claims):
+    for claim in claims:
+        start = 0
+        while True:
+            index = text.find(claim, start)
+            if index < 0:
+                break
+            clause = text[index + len(claim):]
+            boundaries = [clause.find(mark) for mark in ("。", "、", ";", "；") if mark in clause]
+            if boundaries:
+                clause = clause[:min(boundaries)]
+            if _contains_any(clause[:40], CWS_PUBLIC_USER_NEGATIONS):
+                return True
+            start = index + len(claim)
+    return False
+
+
 def _mentioned_cws_products(text, products):
     normalized = " ".join(text.lower().split())
     mentioned = set()
@@ -150,13 +174,13 @@ def _content_issue(text, healthy_products, all_products):
     if cws_context and auth_action and not auth_safe:
         return "unnecessary_api_reconfiguration"
 
-    user_metric = _contains_any(normalized, ("users", "users-7d", "active users", "アクティブユーザー"))
-    public_display = _contains_any(normalized, ("公開表示", "公開ストア", "公開カウンタ", "public listing", "publicly displayed"))
-    public_safe = _contains_any(normalized, (
-        "公開表示ではない", "公開指標ではない", "公開ストア表示指標ではない",
-        "公開ストア上の表示指標ではない", "not a public", "is not public",
-    ))
-    if user_metric and public_display and not public_safe:
+    user_metric = _contains_any(normalized, CWS_ACTIVE_USER_TERMS)
+    public_claim = _contains_any(normalized, CWS_PUBLIC_USER_CLAIMS)
+    public_display = _contains_any(normalized, CWS_PUBLIC_DISPLAY_CONTEXT)
+    public_safe = _claim_is_negated(normalized, CWS_PUBLIC_USER_CLAIMS) or (
+        user_metric and public_display and _claim_is_negated(normalized, CWS_PUBLIC_DISPLAY_CONTEXT)
+    )
+    if (public_claim or (user_metric and public_display)) and not public_safe:
         return "users_misclassified_as_public_listing"
 
     retention = _contains_any(normalized, ("継続率", "離脱率", "retention", "churn"))
@@ -258,7 +282,10 @@ def analyze(snapshot, history):
                 "public_listing_scraping": "Removed; no public store page scraping is used",
                 "partial_periods": "Use observed_days/expected_days and never present partial totals as complete periods",
                 "missing_values": "null/missing/pending/failed are unknown states, never numeric zero",
-                "active_users": "users and users-7d are active-user metrics, not total installed users",
+                "active_users": {
+                    definition["api_metric"]: definition["description"]
+                    for definition in CWS_ACTIVE_USER_DEFINITIONS.values()
+                },
                 "recommendation_guard": (
                     "When data_source is chrome_web_store_api_v2 and collection status is ok/partial, do not recommend "
                     "CSV import, API reconnection, authentication reconfiguration, or public listing scraping"
