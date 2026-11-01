@@ -7,7 +7,13 @@ import os
 
 from growth_agent.ai import analyze, log_line
 from growth_agent.report import build_actions, render
-from growth_agent.collectors import _public_store_metrics, _utc_range, collect_chrome_web_store, collect_cloudflare
+from growth_agent.collectors import (
+    _utc_range,
+    collect_chrome_web_store,
+    collect_cloudflare,
+    collect_github,
+    collect_x,
+)
 from datetime import date
 
 
@@ -74,6 +80,46 @@ class ReportTests(unittest.TestCase):
         self.assertIn("ルールベース分析へフォールバック", report)
         self.assertIn("reason=max_output_tokens", report)
 
+    def test_report_shows_cws_periods_coverage_and_active_users(self):
+        snapshot = self.snapshot()
+        snapshot["sources"]["chrome_web_store"]["phrasecrate"] = {
+            "status": "ok", "error": None,
+            "metrics": {
+                "installs": None, "page_views": None,
+                "periods": {
+                    "1d": {key: {"value": None, "state": "missing", "observed_days": 0, "expected_days": 1} for key in ("installs", "uninstalls", "impressions", "page_views")},
+                    "7d": {key: {"value": 7, "state": "partial", "observed_days": 5, "expected_days": 7} for key in ("installs", "uninstalls", "impressions", "page_views")},
+                    "30d": {key: {"value": 30, "state": "complete", "observed_days": 30, "expected_days": 30} for key in ("installs", "uninstalls", "impressions", "page_views")},
+                },
+                "conversion_rate": {"1d": None, "7d": None, "30d": 0.1},
+                "active_users": {
+                    "users": {"value": 4, "date": "2026-10-21", "trend_7d": [{"date": "2026-10-21", "value": 4}]},
+                    "users_7d": {"value": 3, "date": "2026-10-21", "trend_7d": []},
+                },
+                "source_breakdown_30d": {
+                    "install_source": {
+                        "values": {"organic": {"installs": 3}},
+                        "state": "partial", "observed_days": 2, "expected_days": 30,
+                    },
+                    "utm_source": {
+                        "values": None, "state": "missing", "observed_days": 0, "expected_days": 30,
+                    },
+                },
+                "data_source": "chrome_web_store_api_v2",
+                "last_updated_at": "2026-10-22T05:00:00+09:00",
+            },
+        }
+        snapshot["actions"] = []
+        report = render(snapshot, [])
+        self.assertIn("### Chrome Web Store公式Metrics", report)
+        self.assertIn("インストール数／ストアPV（参考比率）", report)
+        self.assertIn("7 (5/7日)", report)
+        self.assertIn("10.0%", report)
+        self.assertIn("Daily active users: 4 (2026-10-21)", report)
+        self.assertIn("10-21:4", report)
+        self.assertIn("install-source（30日、取得 2/30日、状態: partial）", report)
+        self.assertIn("UTM source（30日、取得 0/30日、状態: missing）", report)
+
     def test_jst_day_is_converted_to_utc(self):
         start, end = _utc_range(date(2026, 10, 22), "Asia/Tokyo")
         self.assertEqual(start, "2026-10-21T15:00:00Z")
@@ -108,35 +154,165 @@ class ReportTests(unittest.TestCase):
         self.assertIn("unknown, not a confirmed zero", result["error"])
         self.assertEqual(result["query_window"]["start"], "2026-10-21T15:00:00Z")
 
-    def test_public_store_listing_is_explicitly_partial(self):
-        page = (
-            '<a href="/category/extensions/productivity/tools">Tools</a>4 users</div>'
-            '<h2>0 out of 5</h2><span class="PmmSTd">No ratings</span>'
-        )
-        metrics = _public_store_metrics(page)
-        self.assertEqual(metrics["users"], 4)
-        self.assertEqual(metrics["reviews"], 0)
-        self.assertIsNone(metrics["installs"])
-        self.assertEqual(metrics["data_source"], "public_listing")
+    @patch("growth_agent.collectors.request_json")
+    def test_cws_api_paginates_and_preserves_zero_missing_and_pending(self, request_json):
+        config = {"products": [{"slug": "phrasecrate", "item_id": "item"}]}
+        request_json.side_effect = [
+            {"metricRows": [{
+                "date": {"year": 2026, "month": 10, "day": 20},
+                "metricValues": [
+                    {"metric": "installs", "value": "0"},
+                    {"metric": "users", "value": "4"},
+                ],
+            }], "nextPageToken": "next"},
+            {"metricRows": [{
+                "date": {"year": 2026, "month": 10, "day": 21},
+                "metricValues": [{"metric": "installs", "value": "2"}],
+            }]},
+            {"metricRows": [{
+                "date": {"year": 2026, "month": 10, "day": 21},
+                "dimensionValues": ["organic"],
+                "metricValues": [{"metric": "installs", "value": "2"}],
+            }]},
+            {"metricRows": []},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"CWS_ACCESS_TOKEN": "token", "CWS_PUBLISHER_ID": "publisher"}):
+                result = collect_chrome_web_store(
+                    config, date(2026, 10, 22), Path(directory), Path(directory) / "history"
+                )
+            raw = json.loads((Path(directory) / "history/raw/phrasecrate/2026-10-22.json").read_text())
+            normalized = json.loads((Path(directory) / "history/normalized/phrasecrate.json").read_text())
+        metrics = result["phrasecrate"]["metrics"]
+        self.assertEqual(metrics["daily"]["2026-10-20"]["installs"], 0)
+        self.assertEqual(metrics["daily"]["2026-10-20"]["metric_states"]["installs"], "observed")
+        self.assertIsNone(metrics["daily"]["2026-10-20"]["uninstalls"])
+        self.assertEqual(metrics["daily"]["2026-10-20"]["metric_states"]["uninstalls"], "missing")
+        self.assertEqual(metrics["daily"]["2026-10-22"]["metric_states"]["installs"], "pending")
+        self.assertEqual(metrics["periods"]["30d"]["installs"]["value"], 2)
+        self.assertEqual(metrics["periods"]["30d"]["installs"]["observed_days"], 2)
+        self.assertIsNone(metrics["periods"]["30d"]["uninstalls"]["value"])
+        self.assertEqual(metrics["periods"]["30d"]["uninstalls"]["observed_days"], 0)
+        self.assertEqual(metrics["source_breakdown_30d"]["install_source"]["values"]["organic"]["installs"], 2)
+        self.assertEqual(metrics["source_breakdown_30d"]["install_source"]["observed_days"], 1)
+        self.assertEqual(len(raw["base"]), 2)
+        self.assertIn("2026-10-21", normalized["daily"])
+        self.assertIn("pageToken=next", request_json.call_args_list[1].args[0])
+        self.assertNotIn("token", json.dumps(raw))
 
-    def test_public_store_parses_rounded_counts(self):
-        page = (
-            '<a href="/category/extensions/productivity/tools">Tools</a>1.5K+ users</div>'
-            '<h2>4.8 out of 5</h2><span class="PmmSTd">1,234 ratings</span>'
-        )
-        metrics = _public_store_metrics(page)
-        self.assertEqual(metrics["users"], 1500)
-        self.assertEqual(metrics["rating"], 4.8)
-        self.assertEqual(metrics["reviews"], 1234)
+    @patch("growth_agent.collectors.request_json")
+    def test_cws_requery_updates_delayed_data_across_report_dates(self, request_json):
+        config = {"products": [{"slug": "phrasecrate", "item_id": "item"}]}
+        request_json.side_effect = [
+            {"metricRows": [
+                {"date": {"year": 2026, "month": 10, "day": 21}, "metricValues": [{"metric": "installs", "value": "1"}]},
+            ]},
+            {"metricRows": [
+                {"date": {"year": 2026, "month": 10, "day": 21}, "dimensionValues": ["organic"], "metricValues": [{"metric": "installs", "value": "1"}]},
+            ]},
+            {"metricRows": []},
+            {"metricRows": [
+                {"date": {"year": 2026, "month": 10, "day": 21}, "metricValues": [{"metric": "installs", "value": "3"}]},
+                {"date": {"year": 2026, "month": 10, "day": 22}, "metricValues": [{"metric": "installs", "value": "2"}]},
+            ]},
+            {"metricRows": [
+                {"date": {"year": 2026, "month": 10, "day": 21}, "dimensionValues": ["organic"], "metricValues": [{"metric": "installs", "value": "3"}]},
+                {"date": {"year": 2026, "month": 10, "day": 22}, "dimensionValues": ["ads"], "metricValues": [{"metric": "installs", "value": "2"}]},
+            ]},
+            {"metricRows": []},
+        ]
+        secret = "ya29.sensitive-access-token"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            storage = root / "history"
+            with patch.dict(os.environ, {"CWS_ACCESS_TOKEN": secret, "CWS_PUBLISHER_ID": "publisher"}):
+                first = collect_chrome_web_store(config, date(2026, 10, 22), root / "imports", storage)
+                second = collect_chrome_web_store(config, date(2026, 10, 23), root / "imports", storage)
+            normalized = json.loads((storage / "normalized/phrasecrate.json").read_text())
+            persisted = "\n".join(path.read_text() for path in storage.rglob("*.json"))
+            raw_dates = {
+                path.stem for path in (storage / "raw/phrasecrate").glob("*.json")
+            }
 
-    @patch("growth_agent.collectors._collect_public_store_item")
-    def test_public_store_current_value_is_not_backdated(self, collect_public):
+        self.assertEqual(first["phrasecrate"]["metrics"]["daily"]["2026-10-21"]["installs"], 1)
+        self.assertEqual(second["phrasecrate"]["metrics"]["daily"]["2026-10-21"]["installs"], 3)
+        self.assertEqual(normalized["daily"]["2026-10-21"]["installs"], 3)
+        self.assertEqual(normalized["daily"]["2026-10-22"]["installs"], 2)
+        self.assertIn("2026-09-23", normalized["daily"])
+        self.assertEqual(second["phrasecrate"]["metrics"]["periods"]["30d"]["installs"]["value"], 5)
+        self.assertEqual(second["phrasecrate"]["metrics"]["source_breakdown_30d"]["install_source"]["observed_days"], 2)
+        self.assertNotIn(secret, persisted)
+        self.assertNotIn("Authorization", persisted)
+        self.assertNotIn("Bearer", persisted)
+        self.assertEqual(raw_dates, {"2026-10-22", "2026-10-23"})
+
+    @patch("growth_agent.collectors.request_json", side_effect=RuntimeError("API denied"))
+    def test_cws_api_failure_uses_csv_without_scraping(self, _request_json):
         config = {"products": [{"slug": "phrasecrate", "item_id": "item"}]}
         with tempfile.TemporaryDirectory() as directory:
-            result = collect_chrome_web_store(config, date(2026, 10, 1), Path(directory), "Asia/Tokyo")
+            imports = Path(directory) / "imports"
+            imports.mkdir()
+            (imports / "phrasecrate.csv").write_text(
+                "date,installs,uninstalls,users,impressions,page_views,users_7d\n"
+                "2026-10-22,1,,4,20,5,3\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"CWS_ACCESS_TOKEN": "token", "CWS_PUBLISHER_ID": "publisher"}):
+                result = collect_chrome_web_store(config, date(2026, 10, 22), imports, Path(directory) / "history")
+        source = result["phrasecrate"]
+        self.assertEqual(source["status"], "partial")
+        self.assertEqual(source["metrics"]["data_source"], "official_csv")
+        self.assertEqual(source["metrics"]["installs"], 1)
+        self.assertIsNone(source["metrics"]["uninstalls"])
+        self.assertIn("API denied", source["error"])
+
+    def test_cws_missing_auth_is_not_zero(self):
+        config = {"products": [{"slug": "phrasecrate", "item_id": "item"}]}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {}, clear=True):
+                result = collect_chrome_web_store(
+                    config, date(2026, 10, 22), Path(directory), Path(directory) / "history"
+                )
         self.assertEqual(result["phrasecrate"]["status"], "missing")
-        self.assertIn("cannot be used as historical data", result["phrasecrate"]["error"])
-        collect_public.assert_not_called()
+        self.assertIsNone(result["phrasecrate"]["metrics"])
+
+    @patch("growth_agent.collectors.request_json")
+    def test_x_collector_still_returns_public_metrics(self, request_json):
+        request_json.side_effect = [
+            {"data": {"id": "user-1"}},
+            {"data": [{"id": "post-1", "text": "hello", "public_metrics": {
+                "impression_count": 100, "like_count": 5, "retweet_count": 2,
+                "reply_count": 1, "quote_count": 0,
+            }}]},
+        ]
+        with patch.dict(os.environ, {"X_BEARER_TOKEN": "x-token"}):
+            result = collect_x({"username": "errrt0dev"}, date(2026, 10, 22), "Asia/Tokyo")
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["metrics"]["posts"], 1)
+        self.assertEqual(result["metrics"]["impressions"], 100)
+        self.assertEqual(result["metrics"]["engagement_rate"], 0.08)
+
+    @patch("growth_agent.collectors.request_json")
+    def test_github_collector_still_returns_repository_and_traffic_metrics(self, request_json):
+        request_json.side_effect = [
+            {"stargazers_count": 7, "open_issues_count": 2},
+            [{"sha": "abc"}],
+            [
+                {"created_at": "2026-10-21T16:00:00Z"},
+                {"created_at": "2026-10-21T17:00:00Z", "pull_request": {}},
+            ],
+            {"views": [{"timestamp": "2026-10-21T00:00:00Z", "count": 10, "uniques": 4}]},
+            {"clones": [{"timestamp": "2026-10-21T00:00:00Z", "count": 3, "uniques": 2}]},
+        ]
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "github-token"}):
+            result = collect_github({"repositories": ["errrt/errrt.github.io"]}, date(2026, 10, 22), "Asia/Tokyo")
+        repo = result["metrics"]["errrt/errrt.github.io"]
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(repo["metrics"]["stars"], 7)
+        self.assertEqual(repo["metrics"]["commits"], 1)
+        self.assertEqual(repo["metrics"]["issues_created"], 1)
+        self.assertEqual(repo["metrics"]["prs_created"], 1)
+        self.assertEqual(repo["metrics"]["views"], 10)
 
 
 class AIAnalysisTests(unittest.TestCase):

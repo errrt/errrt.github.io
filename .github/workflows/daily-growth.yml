@@ -13,6 +13,7 @@ on:
 permissions:
   contents: read
   actions: read
+  id-token: write
 
 concurrency:
   group: daily-growth-report
@@ -38,6 +39,19 @@ jobs:
             gh run download "$previous_run" --name growth-history --dir growth-history || true
           fi
 
+      - id: google-auth
+        name: Authenticate with Google Cloud WIF
+        continue-on-error: true
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CWS_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 300s
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore.readonly
+          create_credentials_file: false
+          export_environment_variables: false
+
       - name: Generate report
         env:
           REPORT_DATE: ${{ inputs.report_date || '' }}
@@ -50,6 +64,8 @@ jobs:
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           OPENAI_MAX_OUTPUT_TOKENS: "4000"
           OPENAI_REASONING_EFFORT: "minimal"
+          CWS_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
         run: |
           args=()
           if [ -n "$REPORT_DATE" ]; then
