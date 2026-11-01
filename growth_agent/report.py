@@ -192,7 +192,7 @@ def render(snapshot, history):
     for slug, source in snapshot["sources"]["chrome_web_store"].items():
         lines += [
             f"#### {slug}", "",
-            "| 期間 | installs | uninstalls | impressions | page views | install/page view |",
+            "| 期間 | installs | uninstalls | impressions | page views | インストール数／ストアPV（参考比率） |",
             "|---|---:|---:|---:|---:|---:|",
         ]
         conversions = _metric(source, "conversion_rate") or {}
@@ -211,14 +211,16 @@ def render(snapshot, history):
         ]
         breakdown = _metric(source, "source_breakdown_30d") or {}
         for title, key in (("install-source", "install_source"), ("UTM source", "utm_source")):
-            values = breakdown.get(key) or {}
+            summary = breakdown.get(key) or {}
+            values = summary.get("values") or {}
+            coverage = f"{summary.get('observed_days', 0)}/{summary.get('expected_days', 30)}日"
             if values:
-                lines.append(f"- {title}（30日）: " + ", ".join(
+                lines.append(f"- {title}（30日、取得 {coverage}、状態: {summary.get('state', 'missing')}）: " + ", ".join(
                     f"{name}=" + "/".join(f"{metric}:{_fmt(value)}" for metric, value in metrics.items())
                     for name, metrics in sorted(values.items())
                 ))
             else:
-                lines.append(f"- {title}（30日）: —（API応答なし）")
+                lines.append(f"- {title}（30日、取得 {coverage}、状態: {summary.get('state', 'missing')}）: —（API応答なし）")
 
     x_metrics = snapshot["sources"]["x"]
     lines += [

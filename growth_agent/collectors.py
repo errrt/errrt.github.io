@@ -242,16 +242,24 @@ def _conversion(period):
     return installs["value"] / page_views["value"]
 
 
-def _source_totals(daily, last_date, days, field):
+def _source_summary(daily, last_date, days, field):
     totals = {}
+    observed_days = 0
     for offset in range(days):
         values = daily.get((last_date - timedelta(days=offset)).isoformat(), {}).get(field) or {}
+        if values:
+            observed_days += 1
         for source, metrics in values.items():
             target = totals.setdefault(source, {})
             for metric, value in metrics.items():
                 if value is not None:
                     target[metric] = target.get(metric, 0) + value
-    return totals or None
+    return {
+        "values": totals or None,
+        "state": "complete" if observed_days == days else ("partial" if observed_days else "missing"),
+        "observed_days": observed_days,
+        "expected_days": days,
+    }
 
 
 def _cws_metrics(daily, report_date, data_source, fetched_at, limitations=None):
@@ -270,8 +278,8 @@ def _cws_metrics(daily, report_date, data_source, fetched_at, limitations=None):
         "install_sources": day.get("install_sources"),
         "utm_sources": day.get("utm_sources"),
         "source_breakdown_30d": {
-            "install_source": _source_totals(daily, report_date, 30, "install_sources"),
-            "utm_source": _source_totals(daily, report_date, 30, "utm_sources"),
+            "install_source": _source_summary(daily, report_date, 30, "install_sources"),
+            "utm_source": _source_summary(daily, report_date, 30, "utm_sources"),
         },
         "data_source": data_source,
         "last_updated_at": fetched_at,

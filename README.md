@@ -116,6 +116,7 @@ date,installs,uninstalls,users,users_7d,impressions,page_views,acquisition_sourc
 ```
 
 `users` and `users-7d` are active-user metrics. They are never presented as total installed users. The public store page is not scraped.
+The report labels `installs / page-views` as a reference ratio, not a strict user conversion rate. Source-dimension totals always include observed-day coverage, so partial responses are not presented as complete 30-day results.
 
 ### Cost and safety controls
 
