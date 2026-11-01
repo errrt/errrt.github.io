@@ -122,7 +122,9 @@ def analyze(snapshot, history):
                     "CSV import, API reconnection, authentication reconfiguration, or public listing scraping"
                 ),
                 "inference_guard": (
-                    "Do not estimate churn, conversion, or causal effects unless comparable observed metrics directly support it"
+                    "Do not estimate churn, retention, conversion, or causal effects unless comparable observed metrics "
+                    "directly support it. Never compare or divide installs by users/users-7d to calculate retention; "
+                    "these metrics have different definitions and populations"
                 ),
             }
         },
@@ -136,6 +138,7 @@ def analyze(snapshot, history):
             "欠損をゼロとして扱わず、因果関係を断定しないでください。各配列は重要度順に最大3件、"
             "各項目は簡潔にしてください。入力のdata_contractを現在の実装仕様として必ず優先し、"
             "古いhistoryに残る過去の収集方式や改善提案を現在も必要なものとして扱わないでください。"
+            "installsとusers/users-7dを直接比較して継続率や離脱率を算出しないでください。"
         ),
         "input": json.dumps(context, ensure_ascii=False),
         "max_output_tokens": _max_output_tokens(),

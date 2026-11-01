@@ -473,9 +473,11 @@ class AIAnalysisTests(unittest.TestCase):
         self.assertIn("never numeric zero", contract["missing_values"])
         self.assertIn("active-user metrics", contract["active_users"])
         self.assertIn("do not recommend", contract["recommendation_guard"])
-        self.assertIn("Do not estimate churn, conversion", contract["inference_guard"])
+        self.assertIn("Do not estimate churn, retention, conversion", contract["inference_guard"])
+        self.assertIn("Never compare or divide installs by users/users-7d", contract["inference_guard"])
         self.assertIn("data_contract", body["instructions"])
         self.assertIn("古いhistory", body["instructions"])
+        self.assertIn("installsとusers/users-7dを直接比較", body["instructions"])
 
     @patch("growth_agent.ai.request_json")
     def test_json_failure_logs_metadata_without_response_content(self, request_json):
