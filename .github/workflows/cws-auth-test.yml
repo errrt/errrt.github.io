@@ -1,0 +1,34 @@
+name: Chrome Web Store Auth Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  query-metrics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: google-auth
+        name: Authenticate with Google Cloud WIF
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CWS_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_lifetime: 300s
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore.readonly
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Query Chrome Web Store metrics
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+        run: python scripts/check_cws_metrics.py
+
