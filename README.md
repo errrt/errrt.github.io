@@ -89,6 +89,9 @@ Open **Settings → Secrets and variables → Actions**. Do not commit any token
 | `X_BEARER_TOKEN` | Secret | Only after paid X API approval | Reads posts and public metrics; set an X developer spend limit first |
 | `OPENAI_API_KEY` | Secret | Optional | Adds AI observations/hypotheses to the deterministic report |
 | `OPENAI_MODEL` | Actions variable | Optional | Model used when `OPENAI_API_KEY` is enabled |
+| `GCP_WIF_PROVIDER` | Actions variable | Yes for store metrics | Full Workload Identity Provider resource name |
+| `GCP_CWS_SERVICE_ACCOUNT` | Actions variable | Yes for store metrics | Existing service account email registered in the Developer Dashboard |
+| `CWS_PUBLISHER_ID` | Actions variable | Yes for store metrics | Chrome Web Store publisher ID |
 
 The Cloudflare Account ID and Web Analytics Site Tag are non-secret identifiers and are already in `growth-agent.json`. `CLOUDFLARE_ACCOUNT_ID` may be supplied as a Secret to override the file. The configured API token must not have write permissions.
 
@@ -96,21 +99,27 @@ The errrt X account is configured as `@errrt0dev`. Its public link is measured t
 
 ### Chrome Web Store data
 
-There is no official Chrome Web Store analytics API for daily installs, uninstalls, impressions, ratings, or reviews. The official dashboard supports CSV export and optional GA4. The collector therefore uses this order:
+The Daily Growth workflow uses GitHub OIDC → Google Cloud Workload Identity Federation → the existing service account. It requests only the `chromewebstore.readonly` scope and calls the official Chrome Web Store API v2 `queryMetrics` method. No JSON key is stored.
 
-1. A normalized official CSV at `imports/chrome-web-store/<slug>.csv`.
-2. If the CSV/day is absent, the public Chrome Web Store listing is read for displayed users, rating, and rating count only.
+The collector uses this order:
 
-The public value is marked `partial` and `data_source: public_listing`; it may be rounded. It is not relabeled as installs. Exact install/uninstall/impression and acquisition-source reporting requires a normalized CSV with:
+1. Official API v2 for `installs`, `uninstalls`, `impressions`, `page-views`, `users`, and `users-7d`, plus `install-source` and `utm-source` where the API returns them.
+2. A normalized official CSV at `imports/chrome-web-store/<slug>.csv` only when API authentication or the request fails.
+
+Every run re-queries the preceding 30 dates so delayed data can replace earlier pending values. Raw API responses and normalized daily rows are saved under `growth-history/chrome-web-store/` and copied into the report artifact. A returned numeric zero is stored as `observed`; absent metrics are `null` with `missing`, and dates after the latest returned API row are `pending`. The API exposes no explicit finalization flag, so `pending` is an agent-side state, not a Google guarantee.
+
+The CSV fallback accepts:
 
 ```csv
-date,installs,uninstalls,users,impressions,rating,reviews,acquisition_source
-2026-10-23,1,0,4,20,0,0,direct
+date,installs,uninstalls,users,users_7d,impressions,page_views,acquisition_source
+2026-10-23,1,0,4,3,20,5,direct
 ```
+
+`users` and `users-7d` are active-user metrics. They are never presented as total installed users. The public store page is not scraped.
 
 ### Cost and safety controls
 
-- Cloudflare Web Analytics, GitHub Actions within account limits, and public Chrome Web Store reads add no new paid service.
+- Cloudflare Web Analytics, Chrome Web Store API v2, Workload Identity Federation, and GitHub Actions within account limits add no new fixed paid service for this setup.
 - OpenAI uses Structured Outputs with minimal reasoning effort and is capped to 4,000 output tokens per run (8,000 hard cap in code). The response must be `completed` before JSON is parsed.
 - X is disabled until the username, paid access, and spend limit are explicitly approved.
 - The workflow does not create Issues/PRs, merge, deploy, or publish X posts. It only prepares and reports recommended actions.

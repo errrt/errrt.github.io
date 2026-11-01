@@ -21,7 +21,7 @@ GitHubの公開APIで確認できた公開repoは`archlint`、`errrt.github.io`�
 | データ源 | 取得できる指標 | 取得できない／制約 | 必要な認証 | 追加費用 | 推奨方法 |
 |---|---|---|---|---|---|
 | Cloudflare Web Analytics | PV (`count`)、訪問 (`sum.visits`)、流入元、日次系列 | Web Analyticsの`visits`は厳密なUUとは同義でない。7日超はサンプリングされ得る | Account Analytics: ReadのAPI Token、Account ID、Site Tag | Web Analytics自体は無料 | GraphQL `rumPageloadEventsAdaptiveGroups`を毎日保存 |
-| Chrome Web Store | 公式ダッシュボードでinstall/uninstall、impression、users、CSV export。公開listingの表示users・評価・評価件数 | 公開・管理APIは日次統計／レビュー取得APIではない。公式の自動CSV export APIは確認できない。公開usersは丸められる場合がある | Publisher dashboard権限。GA4を使うならGoogle認証 | 基本無料 | 公式CSVを優先し、未投入日は公開listingをpartialデータとして補助利用 |
+| Chrome Web Store | API v2 `queryMetrics`でinstall/uninstall、impression、page view、daily/7-day active users、対応する流入dimension。CSV export | API応答に存在しないmetricは取得不可。`users`/`users-7d`は総インストール数ではない | Developer Dashboard登録済みサービスアカウント、GitHub OIDC/WIF、readonly scope | 基本無料 | 公式APIを優先し、失敗時のみ公式CSVを利用。公開listingはスクレイピングしない |
 | X API | 投稿、public metrics（impression、like、repost、reply等）。own postの非公開指標はuser-context認証 | 読み取りは従量課金。非公開／organic metricsはOAuth user contextが必要 | Developer app、Bearer Token。詳細指標はOAuth 1.0aまたはOAuth 2.0 user context | 2026-10-23時点でPost read $0.005/resource、User read $0.010/resource。価格変更あり | 承認後、少量の日次取得＋Developer Consoleのspend limit |
 | GitHub | commits、issues、PR、stars。traffic views/clones/referrersは直近14日 | trafficはwrite accessが必要で14日rolling。`GITHUB_TOKEN`は原則そのrepoのみ | 現repoはActions token。他repoはfine-grained PATまたはGitHub App | 通常無料 | 毎日snapshotして14日制限を補う |
 | OpenAI API | Responses APIによるレポート分析 | ChatGPTの会話へ任意のActions結果を直接投稿する一般公開APIは確認できない | OpenAI API key | model token従量課金 | まず決定論的分析。API導入時は1runの出力上限を設定 |
@@ -36,7 +36,7 @@ GitHubの公開APIで確認できた公開repoは`archlint`、`errrt.github.io`�
 2. GitHub Actions Secretsに`CLOUDFLARE_API_TOKEN`を追加する。Account IDとSite Tagは非機密設定として`growth-agent.json`に設定済み。
 3. Xのユーザー名`errrt0dev`は`growth-agent.json`に設定済み。有料のX API credit購入は別途事前承認後に行う。
 4. 複数repoを読む場合は、対象repoだけに絞ったfine-grained PATを`GROWTH_GITHUB_TOKEN`として追加する。trafficにはAdministration: Readが必要。
-5. 正確な日次獲得指標が必要なら、Chrome Web Storeの公式CSVを`imports/chrome-web-store/<slug>.csv`へ配置する。列名は`date,installs,uninstalls,users,impressions,rating,reviews,acquisition_source`へ正規化する。未投入日は公開listingのusers・評価のみ自動取得する。
+5. Chrome Web StoreはGitHub OIDC/WIF経由で公式API v2を実行する。API障害時だけ、公式CSVを`imports/chrome-web-store/<slug>.csv`へ配置してフォールバックできる。
 6. AI分析を有効化する場合だけ`OPENAI_API_KEY` Secretと`OPENAI_MODEL` Actions Variableを追加する。1実行の出力は最大1,200 tokens（コード上限2,000）に制限している。
 
 ## 実装方針

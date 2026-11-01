@@ -1,5 +1,6 @@
 import argparse
 import json
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -30,7 +31,8 @@ def main():
         "sources": {
             "cloudflare": collect_cloudflare(config["cloudflare"], report_date, config.get("timezone", "Asia/Tokyo")),
             "chrome_web_store": collect_chrome_web_store(
-                config["chrome_web_store"], report_date, args.imports_dir, config.get("timezone", "Asia/Tokyo")
+                config["chrome_web_store"], report_date, args.imports_dir,
+                args.history_dir / "chrome-web-store", config.get("timezone", "Asia/Tokyo")
             ),
             "x": collect_x(config["x"], report_date, config.get("timezone", "Asia/Tokyo")),
             "github": collect_github(config["github"], report_date, config.get("timezone", "Asia/Tokyo")),
@@ -44,6 +46,9 @@ def main():
     snapshot_json = json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n"
     (args.output_dir / "snapshot.json").write_text(snapshot_json, encoding="utf-8")
     (args.output_dir / "report.md").write_text(render(snapshot, history), encoding="utf-8")
+    cws_history = args.history_dir / "chrome-web-store"
+    if cws_history.exists():
+        shutil.copytree(cws_history, args.output_dir / "chrome-web-store", dirs_exist_ok=True)
     (args.history_dir / f"{report_date.isoformat()}.json").write_text(snapshot_json, encoding="utf-8")
     print(args.output_dir / "report.md")
 

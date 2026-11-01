@@ -51,6 +51,27 @@ def _comparison(label, current, values):
     return f"- {label}: {_fmt(current)}（直近{len(values)}日平均 {_fmt(baseline)} 比 {absolute:+,.0f} / {delta:+.1%}）"
 
 
+def _period_cell(source, period, metric):
+    value = (((source.get("metrics") or {}).get("periods") or {}).get(period) or {}).get(metric) or {}
+    if value.get("value") is None:
+        return "—"
+    coverage = "" if value.get("state") == "complete" else f" ({value.get('observed_days', 0)}/{value.get('expected_days', 0)}日)"
+    return f"{_fmt(value['value'])}{coverage}"
+
+
+def _active_cell(source, metric):
+    value = (((source.get("metrics") or {}).get("active_users") or {}).get(metric) or {})
+    if value.get("value") is None:
+        return "—"
+    return f"{_fmt(value['value'])} ({value.get('date')})"
+
+
+def _active_trend(source, metric):
+    value = (((source.get("metrics") or {}).get("active_users") or {}).get(metric) or {})
+    trend = value.get("trend_7d") or []
+    return " → ".join(f"{row['date'][5:]}:{_fmt(row.get('value'))}" for row in trend) or "—"
+
+
 def _one_line(value):
     return " ".join(str(value).split())
 
@@ -68,20 +89,12 @@ def build_actions(snapshot, history):
 
     stores = snapshot["sources"]["chrome_web_store"]
     missing_stores = [name for name, value in stores.items() if value["status"] not in ("ok", "partial")]
-    public_only = [name for name, value in stores.items() if _metric(value, "data_source") == "public_listing"]
     if missing_stores:
         actions.append({
             "product": ", ".join(missing_stores), "problem": "Chrome Web Store指標を取得できていない",
-            "evidence": "公式CSVも公開ストア表示も取得できなかった。",
-            "recommendation": "公式Developer Dashboardのanalytics CSVを正規化してimports/chrome-web-store/へ配置する。",
+            "evidence": "公式APIとCSVフォールバックの両方から利用可能なデータを取得できなかった。",
+            "recommendation": "WIFのVariables・サービスアカウント権限・Chrome Web Store readonly API応答を確認し、必要なら公式CSVをimports/chrome-web-store/へ配置する。",
             "expected_effect": "install・impression推移を測定可能にする。次回レポートのKPI行が欠損でないことを確認する。", "priority": "P0",
-        })
-    elif public_only:
-        actions.append({
-            "product": ", ".join(public_only), "problem": "獲得指標が公開ストア表示の概数に限定されている",
-            "evidence": "自動取得できるのは公開ユーザー数と評価のみで、日次install・uninstall・impressionは公式APIから取得できない。",
-            "recommendation": "Developer Dashboardから公式analytics CSVを定期取得し、workflow実行前にimports/chrome-web-store/へ投入する運用を決める。",
-            "expected_effect": "獲得と離脱を日次で区別できる。CSV由来のinstall・uninstall・impressionが表示されることを検証する。", "priority": "P1",
         })
 
     x = snapshot["sources"]["x"]
@@ -160,20 +173,52 @@ def render(snapshot, history):
         f"全{len(snapshot['sources'])}データソース群のうち{source_groups_ok}群から利用可能なデータを取得しました。"
         f"欠損は「—」で示し、ゼロとして扱いません。重複を除いた本日の推奨アクションは{len(actions)}件です。",
         "", "## プロダクト別KPI", "",
-        "| プロダクト | PV | 訪問 | install | users | 評価 | reviews | GitHub Stars | X投稿 |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| プロダクト | PV | 訪問 | install | active users | GitHub Stars | X投稿 |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ]
     github_repos = snapshot["sources"]["github"].get("metrics") or {}
     lp_repo = github_repos.get("errrt/errrt.github.io", {})
     lines.append(
-        f"| errrt LP | {_fmt(_metric(cf, 'page_views'))} | {_fmt(_metric(cf, 'visits'))} | — | — | — | — | {_fmt(_metric(lp_repo, 'stars'))} | — |"
+        f"| errrt LP | {_fmt(_metric(cf, 'page_views'))} | {_fmt(_metric(cf, 'visits'))} | — | — | {_fmt(_metric(lp_repo, 'stars'))} | — |"
     )
     for slug, source in snapshot["sources"]["chrome_web_store"].items():
         lines.append(
-            f"| {slug} | — | — | {_fmt(_metric(source, 'installs'))} | {_fmt(_metric(source, 'users'))} | "
-            f"{_fmt(_metric(source, 'rating'))} | {_fmt(_metric(source, 'reviews'))} | — | — |"
+            f"| {slug} | {_fmt(_metric(source, 'page_views'))} | — | {_fmt(_metric(source, 'installs'))} | "
+            f"{_active_cell(source, 'users')} | — | — |"
         )
-    lines.append(f"| errrt X | — | — | — | — | — | — | — | {_fmt(_metric(snapshot['sources']['x'], 'posts'))} |")
+    lines.append(f"| errrt X | — | — | — | — | — | {_fmt(_metric(snapshot['sources']['x'], 'posts'))} |")
+
+    lines += ["", "### Chrome Web Store公式Metrics", ""]
+    for slug, source in snapshot["sources"]["chrome_web_store"].items():
+        lines += [
+            f"#### {slug}", "",
+            "| 期間 | installs | uninstalls | impressions | page views | install/page view |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+        conversions = _metric(source, "conversion_rate") or {}
+        for label in ("1d", "7d", "30d"):
+            lines.append(
+                f"| {label} | {_period_cell(source, label, 'installs')} | {_period_cell(source, label, 'uninstalls')} | "
+                f"{_period_cell(source, label, 'impressions')} | {_period_cell(source, label, 'page_views')} | "
+                f"{_fmt(conversions.get(label), percent=True)} |"
+            )
+        lines += [
+            "",
+            f"- Daily active users: {_active_cell(source, 'users')}（総インストールユーザー数ではありません）",
+            f"- 7-day active users: {_active_cell(source, 'users_7d')}（総インストールユーザー数ではありません）",
+            f"- Active users推移（取得済み直近7日）: {_active_trend(source, 'users')}",
+            f"- 取得元: `{_metric(source, 'data_source') or '—'}` / 最終取得: {_metric(source, 'last_updated_at') or '—'}",
+        ]
+        breakdown = _metric(source, "source_breakdown_30d") or {}
+        for title, key in (("install-source", "install_source"), ("UTM source", "utm_source")):
+            values = breakdown.get(key) or {}
+            if values:
+                lines.append(f"- {title}（30日）: " + ", ".join(
+                    f"{name}=" + "/".join(f"{metric}:{_fmt(value)}" for metric, value in metrics.items())
+                    for name, metrics in sorted(values.items())
+                ))
+            else:
+                lines.append(f"- {title}（30日）: —（API応答なし）")
 
     x_metrics = snapshot["sources"]["x"]
     lines += [
@@ -230,8 +275,8 @@ def render(snapshot, history):
         visits = _metric(cf, "visits")
         rate = total_clicks / visits if visits else None
         lines.append(f"- 観測事実: LP訪問 {_fmt(visits)} に対し外部リンククリック {_fmt(total_clicks)}（クリック/訪問 {_fmt(rate, percent=True)}）。")
-    if any(_metric(value, "data_source") == "public_listing" for value in snapshot["sources"]["chrome_web_store"].values()):
-        lines.append("- 計測上の制約: ストアの公開usersは取得できるが、日次install・impressionがないためLP→install転換率は算出できない。")
+    if any(_metric(value, "data_source") != "chrome_web_store_api_v2" for value in snapshot["sources"]["chrome_web_store"].values()):
+        lines.append("- 計測上の制約: Chrome Web Store公式APIを取得できない製品があり、CSVフォールバックまたは欠損です。")
     if snapshot["sources"]["x"].get("status") != "ok":
         lines.append("- 計測上の制約: X投稿指標が欠損しており、投稿→LP流入の寄与を分離できない。")
 

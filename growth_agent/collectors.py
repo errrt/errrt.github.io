@@ -1,14 +1,12 @@
 import csv
-import html
 import json
 import os
-import re
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
-from .http import request_json, request_text
+from .http import request_json
 
 
 def missing(reason):
@@ -95,94 +93,299 @@ def collect_cloudflare(config, report_date, timezone_name):
         return failed(error)
 
 
-def _number(value):
-    normalized = value.replace(",", "").strip().upper()
-    multiplier = 1
-    if normalized.endswith("K"):
-        multiplier, normalized = 1_000, normalized[:-1]
-    elif normalized.endswith("M"):
-        multiplier, normalized = 1_000_000, normalized[:-1]
-    return float(normalized) * multiplier
+CWS_METRICS = ("installs", "uninstalls", "impressions", "page-views", "users", "users-7d")
 
 
-def _public_store_metrics(page):
-    text = html.unescape(page)
-    users_match = re.search(r"([\d,.]+\s*[KM]?)\+? users</div>", text, re.IGNORECASE)
-    rating_match = re.search(r"([\d.]+) out of 5", text, re.IGNORECASE)
-    reviews_match = re.search(r'class="PmmSTd">\s*([\d,]+) ratings?\s*</span>', text, re.IGNORECASE)
-    no_ratings = re.search(r'class="PmmSTd">\s*No ratings\s*</span>', text, re.IGNORECASE)
-    if not users_match:
-        raise RuntimeError("Public listing did not contain a user count")
+def _cws_url(publisher_id, item_id, first_date, last_date, metrics, dimension=None, page_token=None):
+    params = {
+        "metrics": metrics,
+        "timeSpec.firstDate.year": first_date.year,
+        "timeSpec.firstDate.month": first_date.month,
+        "timeSpec.firstDate.day": first_date.day,
+        "timeSpec.lastDate.year": last_date.year,
+        "timeSpec.lastDate.month": last_date.month,
+        "timeSpec.lastDate.day": last_date.day,
+        "pageSize": 1000,
+    }
+    if dimension:
+        params["dimensions"] = dimension
+    if page_token:
+        params["pageToken"] = page_token
+    resource = f"publishers/{publisher_id}/items/{item_id}"
+    return f"https://chromewebstore.googleapis.com/v2/{resource}:queryMetrics?{urlencode(params, doseq=True)}"
+
+
+def _cws_query_pages(publisher_id, item_id, first_date, last_date, metrics, token, dimension=None):
+    pages = []
+    page_token = None
+    while True:
+        payload = request_json(
+            _cws_url(publisher_id, item_id, first_date, last_date, metrics, dimension, page_token),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if not isinstance(payload.get("metricRows", []), list):
+            raise RuntimeError("Chrome Web Store API response has no metricRows array")
+        pages.append(payload)
+        page_token = payload.get("nextPageToken")
+        if not page_token:
+            return pages
+
+
+def _cws_date(row):
+    value = row.get("date") or {}
+    return f"{int(value['year']):04d}-{int(value['month']):02d}-{int(value['day']):02d}"
+
+
+def _metric_value(value):
+    raw = value.get("value")
+    return int(raw) if raw not in (None, "") else None
+
+
+def _empty_day(state="missing"):
     return {
         "installs": None,
         "uninstalls": None,
-        "users": _number(users_match.group(1).replace(" ", "")),
         "impressions": None,
-        "rating": float(rating_match.group(1)) if rating_match else None,
-        "reviews": float(reviews_match.group(1).replace(",", "")) if reviews_match else (0.0 if no_ratings else None),
-        "acquisition_source": None,
-        "data_source": "public_listing",
-        "limitations": "Public user counts may be rounded; installs, uninstalls, impressions, and acquisition sources are unavailable.",
+        "page_views": None,
+        "users": None,
+        "users_7d": None,
+        "metric_states": {metric.replace("-", "_"): state for metric in CWS_METRICS},
+        "install_sources": None,
+        "utm_sources": None,
     }
 
 
-def _collect_public_store_item(product):
-    item_id = product["item_id"]
-    slug = product["slug"]
-    url = product.get("url") or f"https://chromewebstore.google.com/detail/{slug}/{item_id}"
-    page = request_text(url)
-    return {"status": "partial", "error": None, "metrics": _public_store_metrics(page)}
+def _normalize_cws_pages(base_pages, dimension_pages, first_date, last_date):
+    dates = {}
+    current = first_date
+    while current <= last_date:
+        dates[current.isoformat()] = _empty_day()
+        current += timedelta(days=1)
+
+    returned_dates = []
+    for payload in base_pages:
+        for row in payload.get("metricRows", []):
+            day = _cws_date(row)
+            returned_dates.append(day)
+            target = dates.setdefault(day, _empty_day())
+            for metric in row.get("metricValues", []):
+                key = metric.get("metric", "").replace("-", "_")
+                if key in target["metric_states"]:
+                    target[key] = _metric_value(metric)
+                    target["metric_states"][key] = "observed"
+
+    # The API does not expose a finalization flag. Dates after its latest returned
+    # date are marked pending, rather than being converted to zeros.
+    latest_returned = max(returned_dates, default=None)
+    if latest_returned:
+        for day, values in dates.items():
+            if day > latest_returned:
+                values["metric_states"] = {key: "pending" for key in values["metric_states"]}
+
+    for dimension, pages in dimension_pages.items():
+        field = "install_sources" if dimension == "install-source" else "utm_sources"
+        for payload in pages:
+            for row in payload.get("metricRows", []):
+                day = _cws_date(row)
+                values = dates.setdefault(day, _empty_day())
+                values[field] = values[field] or {}
+                label = (row.get("dimensionValues") or ["unknown"])[0]
+                values[field][label] = {
+                    metric.get("metric", "").replace("-", "_"): _metric_value(metric)
+                    for metric in row.get("metricValues", [])
+                }
+    return dates
 
 
-def collect_chrome_web_store(config, report_date, imports_dir, timezone_name="Asia/Tokyo"):
+def _period(daily, last_date, days):
+    selected = [(last_date - timedelta(days=offset)).isoformat() for offset in range(days)]
+    output = {}
+    for metric in ("installs", "uninstalls", "impressions", "page_views"):
+        observed = [day for day in selected if daily.get(day, {}).get("metric_states", {}).get(metric) == "observed"]
+        values = [daily[day][metric] for day in observed if daily[day].get(metric) is not None]
+        output[metric] = {
+            "value": sum(values) if values else None,
+            "state": "complete" if len(observed) == days else ("partial" if observed else "missing"),
+            "observed_days": len(observed),
+            "expected_days": days,
+        }
+    return output
+
+
+def _latest_active(daily, metric, last_date):
+    candidates = [
+        (day, values.get(metric))
+        for day, values in daily.items()
+        if day <= last_date.isoformat()
+        and values.get("metric_states", {}).get(metric) == "observed"
+        and values.get(metric) is not None
+    ]
+    if not candidates:
+        return {"value": None, "date": None, "state": "missing", "trend_7d": []}
+    day, value = max(candidates)
+    trend = [
+        {"date": date_key, "value": daily.get(date_key, {}).get(metric)}
+        for date_key in (
+            (last_date - timedelta(days=offset)).isoformat()
+            for offset in reversed(range(7))
+        )
+        if daily.get(date_key, {}).get("metric_states", {}).get(metric) == "observed"
+    ]
+    return {"value": value, "date": day, "state": "observed", "trend_7d": trend}
+
+
+def _conversion(period):
+    installs = period["installs"]
+    page_views = period["page_views"]
+    if installs["state"] != "complete" or page_views["state"] != "complete" or not page_views["value"]:
+        return None
+    return installs["value"] / page_views["value"]
+
+
+def _source_totals(daily, last_date, days, field):
+    totals = {}
+    for offset in range(days):
+        values = daily.get((last_date - timedelta(days=offset)).isoformat(), {}).get(field) or {}
+        for source, metrics in values.items():
+            target = totals.setdefault(source, {})
+            for metric, value in metrics.items():
+                if value is not None:
+                    target[metric] = target.get(metric, 0) + value
+    return totals or None
+
+
+def _cws_metrics(daily, report_date, data_source, fetched_at, limitations=None):
+    periods = {label: _period(daily, report_date, days) for label, days in (("1d", 1), ("7d", 7), ("30d", 30))}
+    day = daily.get(report_date.isoformat(), _empty_day())
+    return {
+        **{key: day.get(key) for key in ("installs", "uninstalls", "impressions", "page_views", "users", "users_7d")},
+        "metric_states": day["metric_states"],
+        "daily": daily,
+        "periods": periods,
+        "conversion_rate": {label: _conversion(period) for label, period in periods.items()},
+        "active_users": {
+            "users": _latest_active(daily, "users", report_date),
+            "users_7d": _latest_active(daily, "users_7d", report_date),
+        },
+        "install_sources": day.get("install_sources"),
+        "utm_sources": day.get("utm_sources"),
+        "source_breakdown_30d": {
+            "install_source": _source_totals(daily, report_date, 30, "install_sources"),
+            "utm_source": _source_totals(daily, report_date, 30, "utm_sources"),
+        },
+        "data_source": data_source,
+        "last_updated_at": fetched_at,
+        "limitations": limitations,
+    }
+
+
+def _read_cws_csv(path, first_date, last_date):
+    with path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    daily = {}
+    for row in rows:
+        day = row.get("date", row.get("Date"))
+        if not day or not first_date.isoformat() <= day <= last_date.isoformat():
+            continue
+        values = _empty_day()
+        for key in ("installs", "uninstalls", "impressions", "page_views", "users", "users_7d"):
+            raw = row.get(key, row.get(key.replace("_", "-").title()))
+            if raw not in (None, ""):
+                values[key] = int(float(raw))
+                values["metric_states"][key] = "observed"
+        source = row.get("acquisition_source", row.get("Acquisition Source"))
+        if source:
+            values["install_sources"] = {source: {"installs": values["installs"]}}
+        daily[day] = values
+    current = first_date
+    while current <= last_date:
+        daily.setdefault(current.isoformat(), _empty_day())
+        current += timedelta(days=1)
+    return daily
+
+
+def _save_cws_data(storage_dir, slug, report_date, raw, daily, fetched_at):
+    raw_dir = storage_dir / "raw" / slug
+    normalized_dir = storage_dir / "normalized"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / f"{report_date.isoformat()}.json").write_text(
+        json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    normalized_path = normalized_dir / f"{slug}.json"
+    existing = {}
+    if normalized_path.exists():
+        try:
+            existing = json.loads(normalized_path.read_text(encoding="utf-8")).get("daily", {})
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    existing.update(daily)
+    normalized_path.write_text(
+        json.dumps({"product": slug, "updated_at": fetched_at, "daily": existing}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def collect_chrome_web_store(config, report_date, imports_dir, storage_dir=None, timezone_name="Asia/Tokyo"):
     results = {}
-    latest_complete_date = datetime.now(ZoneInfo(timezone_name)).date() - timedelta(days=1)
+    token = os.getenv("CWS_ACCESS_TOKEN")
+    publisher_id = os.getenv("CWS_PUBLISHER_ID")
+    first_date = report_date - timedelta(days=29)
+    fetched_at = datetime.now(ZoneInfo(timezone_name)).isoformat()
+    storage_dir = storage_dir or Path("growth-history/chrome-web-store")
     for product in config.get("products", []):
         slug = product["slug"]
+        api_error = None
+        if token and publisher_id:
+            try:
+                base_pages = _cws_query_pages(
+                    publisher_id, product["item_id"], first_date, report_date, CWS_METRICS, token
+                )
+                dimension_pages = {}
+                dimension_errors = []
+                for dimension, metrics in (("install-source", ("installs",)), ("utm-source", ("installs", "page-views"))):
+                    try:
+                        dimension_pages[dimension] = _cws_query_pages(
+                            publisher_id, product["item_id"], first_date, report_date, metrics, token, dimension
+                        )
+                    except Exception as error:
+                        dimension_errors.append(f"{dimension}: {error}")
+                daily = _normalize_cws_pages(base_pages, dimension_pages, first_date, report_date)
+                raw = {
+                    "product": slug,
+                    "item_id": product["item_id"],
+                    "fetched_at": fetched_at,
+                    "query": {"first_date": first_date.isoformat(), "last_date": report_date.isoformat()},
+                    "base": base_pages,
+                    "dimensions": dimension_pages,
+                    "dimension_errors": dimension_errors,
+                }
+                _save_cws_data(storage_dir, slug, report_date, raw, daily, fetched_at)
+                limitations = (
+                    "Dimension queries were unavailable: " + "; ".join(dimension_errors)
+                    if dimension_errors else None
+                )
+                metrics = _cws_metrics(daily, report_date, "chrome_web_store_api_v2", fetched_at, limitations)
+                results[slug] = {"status": "partial" if dimension_errors else "ok", "error": limitations, "metrics": metrics}
+                continue
+            except Exception as error:
+                api_error = str(error)
+        else:
+            api_error = "CWS_ACCESS_TOKEN and CWS_PUBLISHER_ID are required for the official API"
+
         path = imports_dir / f"{slug}.csv"
         if not path.exists():
-            if report_date != latest_complete_date:
-                results[slug] = missing(
-                    "Public listing is a current observation and cannot be used as historical data; official CSV required"
-                )
-                continue
-            try:
-                results[slug] = _collect_public_store_item(product)
-            except Exception as error:
-                results[slug] = missing(
-                    f"Official analytics CSV is absent and public listing fallback failed: {error}"
-                )
+            results[slug] = missing(f"Official API unavailable ({api_error}); fallback CSV is absent")
             continue
         try:
-            with path.open(newline="", encoding="utf-8-sig") as handle:
-                rows = list(csv.DictReader(handle))
-            matching = [row for row in rows if row.get("date", row.get("Date")) == report_date.isoformat()]
-            if not matching:
-                if report_date != latest_complete_date:
-                    results[slug] = missing(
-                        f"No CSV row for {report_date.isoformat()}; public listing cannot be backdated"
-                    )
-                    continue
-                try:
-                    results[slug] = _collect_public_store_item(product)
-                    results[slug]["metrics"]["limitations"] = (
-                        f"Official CSV has no row for {report_date.isoformat()}; "
-                        + results[slug]["metrics"]["limitations"]
-                    )
-                except Exception as error:
-                    results[slug] = missing(f"No CSV row for {report_date.isoformat()} and public fallback failed: {error}")
-                continue
-            row = matching[-1]
-            metrics = {}
-            for key in ("installs", "uninstalls", "users", "impressions", "rating", "reviews"):
-                raw = row.get(key, row.get(key.title()))
-                metrics[key] = float(raw) if raw not in (None, "") else None
-            metrics["acquisition_source"] = row.get("acquisition_source", row.get("Acquisition Source")) or None
-            metrics["data_source"] = "official_csv"
-            metrics["limitations"] = None
-            results[slug] = {"status": "ok", "error": None, "metrics": metrics}
+            daily = _read_cws_csv(path, first_date, report_date)
+            metrics = _cws_metrics(
+                daily, report_date, "official_csv", fetched_at,
+                f"Official API unavailable ({api_error}); using the CSV fallback.",
+            )
+            results[slug] = {"status": "partial", "error": metrics["limitations"], "metrics": metrics}
         except Exception as error:
-            results[slug] = failed(error)
+            results[slug] = failed(f"Official API failed ({api_error}); CSV fallback failed: {error}")
     return results
 
 
