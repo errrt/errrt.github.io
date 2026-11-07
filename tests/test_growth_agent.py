@@ -234,17 +234,20 @@ class ReportTests(unittest.TestCase):
     @patch("growth_agent.collectors.request_json")
     def test_cloudflare_separates_outbound_clicks_from_lp_views(self, request_json):
         request_json.return_value = {"data": {"viewer": {"accounts": [{
-            "totals": [{"count": 10, "sum": {"visits": 6}}],
+            "totals": [{"count": 16, "sum": {"visits": 6}}],
             "referrers": [],
             "paths": [
                 {"count": 8, "dimensions": {"requestPath": "/"}},
                 {"count": 2, "dimensions": {"requestPath": "/go/phraseCrate/"}},
+                {"count": 3, "dimensions": {"requestPath": "/go/tabParcel/index.html"}},
+                {"count": 1, "dimensions": {"requestPath": "/go/tinyExpander/"}},
+                {"count": 2, "dimensions": {"requestPath": "/go/tinyExpander/index.html"}},
             ],
         }]}}}
         with patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "token", "CLOUDFLARE_ACCOUNT_ID": "account"}):
             result = collect_cloudflare({"site_tag": "site"}, date(2026, 10, 22), "Asia/Tokyo")
         self.assertEqual(result["metrics"]["page_views"], 8)
-        self.assertEqual(result["metrics"]["outbound_clicks"], {"phraseCrate": 2})
+        self.assertEqual(result["metrics"]["outbound_clicks"], {"phraseCrate": 2, "tabParcel": 3, "tinyExpander": 3})
 
     @patch("growth_agent.collectors.request_json")
     def test_cloudflare_empty_response_is_missing_not_zero(self, request_json):
