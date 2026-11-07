@@ -7,6 +7,7 @@ from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 from .http import request_json
+from .metrics import period_is_complete
 
 
 def missing(reason):
@@ -202,6 +203,11 @@ def _period(daily, last_date, days):
     output = {}
     for metric in ("installs", "uninstalls", "impressions", "page_views"):
         states = [daily.get(day, {}).get("metric_states", {}).get(metric, "missing") for day in selected]
+        # A null is unknown even if an upstream row marked it observed.
+        states = [
+            "missing" if state == "observed" and daily.get(day, {}).get(metric) is None else state
+            for day, state in zip(selected, states)
+        ]
         observed = [day for day, state in zip(selected, states) if state == "observed"]
         values = [daily[day][metric] for day in observed if daily[day].get(metric) is not None]
         state_counts = {state: states.count(state) for state in ("observed", "pending", "missing", "failed")}
@@ -252,7 +258,10 @@ def _latest_active(daily, metric, last_date):
 def _conversion(period):
     installs = period["installs"]
     page_views = period["page_views"]
-    if installs["state"] != "observed" or page_views["state"] != "observed" or not page_views["value"]:
+    if (
+        not period_is_complete(installs) or not period_is_complete(page_views)
+        or installs["expected_days"] != page_views["expected_days"] or not page_views["value"]
+    ):
         return None
     return installs["value"] / page_views["value"]
 

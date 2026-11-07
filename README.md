@@ -118,7 +118,9 @@ date,installs,uninstalls,users,users_7d,impressions,page_views,acquisition_sourc
 ```
 
 `users` and `users-7d` are active-user metrics. They are never presented as total installed users. The public store page is not scraped.
-The report labels `installs / page-views` as a reference ratio, not a strict user conversion rate. Source-dimension totals always include observed-day coverage, so partial responses are not presented as complete 30-day results.
+The 1/7/30-day flow totals show observed/expected days and missing, pending, and failed counts. Partial sums contain only observed daily values; unknown days are never filled with zero. `installs` counts installation events, not new or unique users. The 7-day sum of daily installs is distinct from the rolling API metric `installs-7d`, which is not collected.
+
+The report labels `installs / page-views` as a reference ratio, not a strict user conversion rate. It calculates this ratio only when both metrics have complete coverage of the same window and page views are nonzero, rechecking coverage even for saved snapshots. Quantitative CWS flow claims are kept in the deterministic KPI tables; AI prose discusses coverage qualitatively, and content validation removes numeric flow claims and new-user misclassifications for both API and CSV sources, including when re-rendering saved analysis. Source-dimension totals always include observed-day coverage, so partial responses are not presented as complete 30-day results.
 
 ### Cost and safety controls
 

@@ -55,3 +55,15 @@ CWS_PUBLIC_USER_NEGATIONS = (
     "not publicly displayed",
     "does not represent",
 )
+
+
+def period_is_complete(value):
+    """Unknown coverage never authorizes a rate or comparison."""
+    expected = value.get("expected_days", 0)
+    return (
+        value.get("state") == "observed"
+        and value.get("value") is not None
+        and expected > 0
+        and value.get("observed_days") == expected
+        and all(value.get(key, 0) == 0 for key in ("missing_days", "pending_days", "failed_days"))
+    )
