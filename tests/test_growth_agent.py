@@ -5,11 +5,14 @@ from pathlib import Path
 import json
 import os
 
-from growth_agent.ai import analyze, log_line
+from growth_agent.ai import analyze, log_line, _validate_content
 from growth_agent.metrics import CWS_ACTIVE_USER_DEFINITIONS
 from growth_agent.report import build_actions, render
 from growth_agent.collectors import (
     _cws_url,
+    _cws_metrics,
+    _empty_day,
+    _conversion,
     _period,
     _utc_range,
     collect_chrome_web_store,
@@ -17,7 +20,7 @@ from growth_agent.collectors import (
     collect_github,
     collect_x,
 )
-from datetime import date
+from datetime import date, timedelta
 
 
 class ReportTests(unittest.TestCase):
@@ -37,7 +40,7 @@ class ReportTests(unittest.TestCase):
         snapshot["actions"] = build_actions(snapshot, [])
         report = render(snapshot, [])
         self.assertIn("| errrt LP | — | — |", report)
-        self.assertIn("| phrasecrate | — | — | — | — |", report)
+        self.assertIn("| phrasecrate | — (missing; 観測日数不明) | — | — (missing; 観測日数不明) | — |", report)
         self.assertIn("## 流入経路の分析", report)
         self.assertIn("## ボトルネック", report)
         self.assertIn("## 前日の施策と結果", report)
@@ -116,15 +119,90 @@ class ReportTests(unittest.TestCase):
         report = render(snapshot, [])
         self.assertIn("### Chrome Web Store公式Metrics", report)
         self.assertIn("インストール数／ストアPV（参考比率）", report)
-        self.assertIn("| 1d | — (pending) |", report)
-        self.assertIn("7 (5/7日)", report)
-        self.assertIn("10.0%", report)
+        self.assertIn("| 1d | — (未観測; 観測 0/1日;", report)
+        self.assertIn("7 (部分合計; 観測 5/7日;", report)
+        self.assertIn("100.0%", report)
+        self.assertNotIn("10.0%", report) # Ignore stale precomputed conversion_rate.
         self.assertIn("Daily active users: 4 (2026-10-21)", report)
         self.assertIn(CWS_ACTIVE_USER_DEFINITIONS["users"]["description"], report)
         self.assertIn(CWS_ACTIVE_USER_DEFINITIONS["users_7d"]["description"], report)
         self.assertIn("10-21:4", report)
         self.assertIn("install-source（30日、取得 2/30日、状態: partial）", report)
         self.assertIn("UTM source（30日、取得 0/30日、状態: missing）", report)
+
+    def test_audited_partial_totals_keep_each_metrics_coverage(self):
+        snapshot = self.snapshot()
+        snapshot["date"] = "2026-11-06"
+        snapshot["actions"] = []
+        stores = snapshot["sources"]["chrome_web_store"] = {}
+        for slug, installs, pv_days in (
+            ("phrasecrate", [24, 28, 26, 25, 27, 25], 1),
+            ("tab-parcel", [24, 26, 26, 27, 26, 25], 2),
+        ):
+            daily = {}
+            for offset in range(7):
+                day = _empty_day("pending" if offset == 6 else "missing")
+                if offset < 6:
+                    day["installs"] = installs[offset]
+                    day["metric_states"]["installs"] = "observed"
+                if offset < pv_days:
+                    day["page_views"] = 2 if offset == 0 else 0
+                    day["metric_states"]["page_views"] = "observed"
+                daily[(date(2026, 10, 31) + timedelta(days=offset)).isoformat()] = day
+            metrics = _cws_metrics(daily, date(2026, 11, 6), "chrome_web_store_api_v2", "test")
+            stores[slug] = {"status": "partial", "metrics": metrics}
+            self.assertIsNone(metrics["conversion_rate"]["7d"])
+            self.assertIsNone(metrics["conversion_rate"]["30d"])
+            self.assertEqual(metrics["periods"]["7d"]["installs"]["value"], sum(installs))
+            self.assertIsNone(daily["2026-11-06"]["installs"])
+            # A stale or externally supplied ratio must not bypass the renderer.
+            metrics["conversion_rate"]["7d"] = sum(installs) / 2
+        before = json.dumps(snapshot, sort_keys=True)
+        report = render(snapshot, [])
+        self.assertEqual(json.dumps(snapshot, sort_keys=True), before)
+        for total in (155, 154):
+            self.assertIn(f"{total} (部分合計; 観測 6/7日; missing 0日, pending 1日, failed 0日", report)
+            self.assertIn(f"{total} (部分合計; 観測 6/30日; missing 23日, pending 1日, failed 0日", report)
+        self.assertIn("2 (部分合計; 観測 1/7日; missing 5日, pending 1日", report)
+        self.assertIn("2 (部分合計; 観測 2/7日; missing 4日, pending 1日", report)
+        self.assertNotIn("7750.0%", report)
+        self.assertNotIn("7700.0%", report)
+        self.assertIn("installs-7dではありません（未取得）", report)
+        self.assertIn("新規ユーザー人数ではありません", report)
+
+    def test_conversion_requires_complete_matching_coverage_and_nonzero_pv(self):
+        complete = {"value": 2, "state": "observed", "observed_days": 7, "expected_days": 7,
+                    "missing_days": 0, "pending_days": 0, "failed_days": 0}
+        for change in ({"state": "partial"}, {"observed_days": 6}, {"pending_days": 1},
+                       {"missing_days": 1}, {"failed_days": 1}, {"value": None}):
+            with self.subTest(change=change):
+                self.assertIsNone(_conversion({"installs": {**complete, **change}, "page_views": complete}))
+                self.assertIsNone(_conversion({"installs": complete, "page_views": {**complete, **change}}))
+        self.assertIsNone(_conversion({"installs": complete, "page_views": {**complete, "value": 0}}))
+        self.assertIsNone(_conversion({"installs": complete, "page_views": {
+            **complete, "observed_days": 30, "expected_days": 30,
+        }}))
+        self.assertEqual(_conversion({"installs": {**complete, "value": 0}, "page_views": complete}), 0)
+        self.assertEqual(_conversion({"installs": complete, "page_views": {**complete, "value": 10}}), 0.2)
+
+    def test_null_marked_observed_is_not_complete_or_zero(self):
+        day = _empty_day("observed")
+        period = _period({"2026-11-06": day}, date(2026, 11, 6), 1)
+        self.assertEqual(period["installs"]["state"], "missing")
+        self.assertEqual(period["installs"]["observed_days"], 0)
+        self.assertEqual(period["installs"]["missing_days"], 1)
+        self.assertIsNone(period["installs"]["value"])
+        self.assertEqual(day["metric_states"]["installs"], "observed")
+
+    def test_failed_missing_pending_and_observed_zero_are_distinct(self):
+        daily = {"2026-11-06": _empty_day("failed")}
+        metrics = _cws_metrics(daily, date(2026, 11, 6), "official_csv", "test")
+        period = metrics["periods"]["7d"]["installs"]
+        self.assertIsNone(period["value"])
+        self.assertEqual((period["observed_days"], period["missing_days"], period["failed_days"]), (0, 6, 1))
+        daily["2026-11-06"]["installs"] = 0
+        daily["2026-11-06"]["metric_states"]["installs"] = "observed"
+        self.assertEqual(_period(daily, date(2026, 11, 6), 7)["installs"]["value"], 0)
 
     def test_jst_day_is_converted_to_utc(self):
         start, end = _utc_range(date(2026, 10, 22), "Asia/Tokyo")
@@ -392,6 +470,34 @@ class AIAnalysisTests(unittest.TestCase):
             "tab-parcel": store,
         }}}
 
+    def test_flow_claims_are_filtered_for_api_csv_and_stored_analysis(self):
+        invalid = [
+            "PhraseCrateの新規ユーザー155人。",
+            "Tab Parcel installs 154 / PV 2で転換率7700%。",
+            "PhraseCrateのinstallsはPVより多い。",
+            "CWS installs-7dは日別合計155。",
+            "PhraseCrate gained 155 new users.",
+            "新規ユーザー155人。",
+            "PV 2なので転換率7700%。",
+        ]
+        valid = "CWSの欠測はゼロではない。完全観測が揃うまで比較は保留する。"
+        for source in ("chrome_web_store_api_v2", "official_csv"):
+            for text in invalid:
+                with self.subTest(source=source, text=text):
+                    snapshot = ReportTests().snapshot()
+                    snapshot["actions"] = []
+                    snapshot["sources"]["chrome_web_store"]["phrasecrate"] = {
+                        "status": "partial", "metrics": {"data_source": source},
+                    }
+                    result = {"summary": text, "observations": [text, valid],
+                              "hypotheses": [valid], "opportunities": [valid]}
+                    cleaned, diagnostics = _validate_content(result, snapshot)
+                    self.assertNotIn(text, json.dumps(cleaned, ensure_ascii=False))
+                    self.assertIn(valid, cleaned["observations"])
+                    self.assertEqual(diagnostics["removed_count"], 2)
+                    snapshot["analysis"] = {"status": "ok", "result": result}
+                    self.assertNotIn(text, render(snapshot, []))
+
     def _mixed_cws_snapshot(self):
         return {"sources": {"chrome_web_store": {
             "phrasecrate": {
@@ -499,6 +605,9 @@ class AIAnalysisTests(unittest.TestCase):
         self.assertIn("Removed", contract["public_listing_scraping"])
         self.assertIn("observed_days/expected_days", contract["partial_periods"])
         self.assertIn("never numeric zero", contract["missing_values"])
+        self.assertIn("not unique or new users", contract["install_definition"])
+        self.assertIn("not collected", contract["daily_vs_rolling"])
+        self.assertIn("never compare partial totals", contract["flow_narrative"])
         self.assertEqual(contract["active_users"], {
             definition["api_metric"]: definition["description"]
             for definition in CWS_ACTIVE_USER_DEFINITIONS.values()

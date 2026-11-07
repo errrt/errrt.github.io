@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 from .http import request_json
 from .metrics import (
@@ -42,7 +43,7 @@ SAFE_CONTENT = {
     "summary": "Chrome Web Store公式API v2の取得範囲と欠損状態を区別して成長指標を評価します。",
     "observations": "Chrome Web Store指標は公式API v2の取得状態とobserved_days/expected_daysに基づき評価します。",
     "hypotheses": "欠損・pendingがある期間は原因を断定せず、次回取得で補完状況を確認します。",
-    "opportunities": "公式API v2の取得を継続し、部分集計は取得日数と欠損状態を併記して比較します。",
+    "opportunities": "公式API v2の取得を継続し、完全観測が揃うまで部分集計同士の比較は保留します。",
 }
 
 
@@ -195,12 +196,38 @@ def _content_issue(text, healthy_products, all_products):
     return None
 
 
+def _measurement_issue(text, stores):
+    # Keep quantitative flow claims in the deterministic, coverage-aware table.
+    # Free-form AI prose cannot reliably preserve per-metric/window coverage.
+    normalized = " ".join(text.lower().split())
+    cws = _mentioned_cws_products(normalized, stores) or _contains_any(normalized, (
+        "cws", "chrome web store", "ストア", "install", "インストール",
+        "新規ユーザー", "新規利用者", "new user",
+    ))
+    flow = _contains_any(normalized, (
+        "install", "インストール", "page_views", "page views", "page-views", "pv",
+        "新規ユーザー", "新規利用者", "new users", "new user",
+    ))
+    if not cws and "lp" not in normalized:
+        cws = _contains_any(normalized, ("page_views", "page views", "page-views", "pv"))
+    quantitative = re.search(r"[0-9０-９]", normalized) or _contains_any(normalized, (
+        "増加", "減少", "上回", "下回", "多い", "少ない", "コンバージョン率", "転換率",
+        "conversion", "higher", "lower", "increased", "decreased",
+    ))
+    if stores and cws and flow and quantitative:
+        return "quantitative_cws_flow_claim"
+    if stores and cws and _contains_any(normalized, ("新規ユーザー", "新規利用者", "new user")):
+        if not _contains_any(normalized, ("ではない", "ではありません", "断定できない", "not ", "cannot")):
+            return "installs_misclassified_as_new_users"
+    return None
+
+
 def _validate_content(result, snapshot):
     stores = (snapshot.get("sources") or {}).get("chrome_web_store") or {}
     all_products = set(stores)
     healthy_products = _healthy_cws_products(snapshot)
     api_healthy = _cws_api_healthy(snapshot)
-    if not api_healthy:
+    if not stores:
         return result, {
             "status": "not_applicable",
             "api_v2_healthy": False,
@@ -210,7 +237,8 @@ def _validate_content(result, snapshot):
 
     sanitized = {key: (list(value) if isinstance(value, list) else value) for key, value in result.items()}
     removed = []
-    summary_issue = _content_issue(sanitized["summary"], healthy_products, all_products)
+    summary_issue = (_measurement_issue(sanitized["summary"], stores)
+                     or _content_issue(sanitized["summary"], healthy_products, all_products))
     if summary_issue:
         sanitized["summary"] = SAFE_CONTENT["summary"]
         removed.append({"field": "summary", "reason": summary_issue})
@@ -219,7 +247,7 @@ def _validate_content(result, snapshot):
     for field in ("observations", "hypotheses", "opportunities"):
         kept = []
         for item in sanitized[field]:
-            issue = _content_issue(item, healthy_products, all_products)
+            issue = _measurement_issue(item, stores) or _content_issue(item, healthy_products, all_products)
             if issue:
                 removed.append({"field": field, "reason": issue})
             else:
@@ -231,8 +259,8 @@ def _validate_content(result, snapshot):
 
     _validate_result(sanitized)
     return sanitized, {
-        "status": "sanitized" if removed else "passed",
-        "api_v2_healthy": True,
+        "status": "sanitized" if removed else ("passed" if api_healthy else "not_applicable"),
+        "api_v2_healthy": api_healthy,
         "healthy_products": sorted(healthy_products),
         "removed_count": len(removed),
         "removed": removed,
@@ -282,6 +310,13 @@ def analyze(snapshot, history):
                 "public_listing_scraping": "Removed; no public store page scraping is used",
                 "partial_periods": "Use observed_days/expected_days and never present partial totals as complete periods",
                 "missing_values": "null/missing/pending/failed are unknown states, never numeric zero",
+                "install_definition": "installs counts installation events, not unique or new users",
+                "daily_vs_rolling": "7d/30d are sums of daily installs; installs-7d is a separate rolling metric and is not collected",
+                "flow_narrative": (
+                    "Leave all quantitative CWS installs/page_views claims and comparisons to the deterministic KPI table. "
+                    "Do not repeat these numbers, rates, or comparisons in prose; discuss coverage limitations qualitatively. "
+                    "Only fully observed metrics from the same window may be compared; never compare partial totals"
+                ),
                 "active_users": {
                     definition["api_metric"]: definition["description"]
                     for definition in CWS_ACTIVE_USER_DEFINITIONS.values()
@@ -308,6 +343,8 @@ def analyze(snapshot, history):
             "各項目は簡潔にしてください。入力のdata_contractを現在の実装仕様として必ず優先し、"
             "古いhistoryに残る過去の収集方式や改善提案を現在も必要なものとして扱わないでください。"
             "installsとusers/users-7dを直接比較して継続率や離脱率を算出しないでください。"
+            "CWSのインストール回数・PVの数値や比率・比較はKPI表に任せ、文章に再掲しないでください。"
+            "installsを新規ユーザー人数と表現せず、日別合計とinstalls-7dを混同しないでください。"
         ),
         "input": json.dumps(context, ensure_ascii=False),
         "max_output_tokens": _max_output_tokens(),

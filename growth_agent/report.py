@@ -1,7 +1,8 @@
 import hashlib
 import json
 
-from .metrics import CWS_ACTIVE_USER_DEFINITIONS
+from .metrics import CWS_ACTIVE_USER_DEFINITIONS, period_is_complete
+from .ai import _validate_content
 
 
 def _metric(source, key):
@@ -55,10 +56,18 @@ def _comparison(label, current, values):
 
 def _period_cell(source, period, metric):
     value = (((source.get("metrics") or {}).get("periods") or {}).get(period) or {}).get(metric) or {}
-    if value.get("value") is None:
-        return f"— ({value.get('state', 'missing')})"
-    coverage = "" if value.get("state") == "observed" else f" ({value.get('observed_days', 0)}/{value.get('expected_days', 0)}日)"
-    return f"{_fmt(value['value'])}{coverage}"
+    if not value:
+        return "— (missing; 観測日数不明)"
+    total = _fmt(value.get("value"))
+    kind = "日別合計" if period_is_complete(value) else ("未観測" if value.get("value") is None else "部分合計")
+    counts = ", ".join(
+        f"{state} {value.get(state + '_days', '不明')}日"
+        for state in ("missing", "pending", "failed")
+    )
+    return (
+        f"{total} ({kind}; 観測 {value.get('observed_days', '不明')}/{value.get('expected_days', '不明')}日; "
+        f"{counts}; {value.get('state', 'missing')})"
+    )
 
 
 def _active_cell(source, metric):
@@ -185,24 +194,37 @@ def render(snapshot, history):
     )
     for slug, source in snapshot["sources"]["chrome_web_store"].items():
         lines.append(
-            f"| {slug} | {_fmt(_metric(source, 'page_views'))} | — | {_fmt(_metric(source, 'installs'))} | "
+            f"| {slug} | {_period_cell(source, '1d', 'page_views')} | — | {_period_cell(source, '1d', 'installs')} | "
             f"{_active_cell(source, 'users')} | — | — |"
         )
     lines.append(f"| errrt X | — | — | — | — | — | {_fmt(_metric(snapshot['sources']['x'], 'posts'))} |")
 
-    lines += ["", "### Chrome Web Store公式Metrics", ""]
+    lines += [
+        "", "### Chrome Web Store公式Metrics", "",
+        "installsはインストール回数であり、新規ユーザー人数ではありません。各期間はレポート日を末日とする日別値の合計です。",
+        "7dは日別installsの合計であり、APIのローリング指標installs-7dではありません（未取得）。",
+        "部分合計は観測済み日だけの値です。missing（欠測）・pending（未確定）・failed（取得失敗）はゼロではありません。",
+        "参考比率は同一期間のinstallsとpage viewsがともに完全観測の場合だけ表示します。新規獲得率を意味しません。", "",
+    ]
     for slug, source in snapshot["sources"]["chrome_web_store"].items():
         lines += [
             f"#### {slug}", "",
             "| 期間 | installs | uninstalls | impressions | page views | インストール数／ストアPV（参考比率） |",
             "|---|---:|---:|---:|---:|---:|",
         ]
-        conversions = _metric(source, "conversion_rate") or {}
         for label in ("1d", "7d", "30d"):
+            period = ((_metric(source, "periods") or {}).get(label) or {})
+            installs, views = period.get("installs", {}), period.get("page_views", {})
+            complete = (
+                period_is_complete(installs) and period_is_complete(views)
+                and installs["expected_days"] == views["expected_days"] == int(label[:-1])
+            )
+            ratio = installs["value"] / views["value"] if complete and views["value"] else None
+            ratio_cell = _fmt(ratio, percent=True) if complete else "— (比較不可: 完全観測ではない)"
             lines.append(
                 f"| {label} | {_period_cell(source, label, 'installs')} | {_period_cell(source, label, 'uninstalls')} | "
                 f"{_period_cell(source, label, 'impressions')} | {_period_cell(source, label, 'page_views')} | "
-                f"{_fmt(conversions.get(label), percent=True)} |"
+                f"{ratio_cell} |"
             )
         lines += [
             "",
@@ -288,6 +310,10 @@ def render(snapshot, history):
 
     analysis = snapshot.get("analysis", {})
     diagnostics = analysis.get("diagnostics") or {}
+    if analysis.get("status") == "ok":
+        result, validation = _validate_content(analysis["result"], snapshot)
+        if validation["removed_count"]:
+            diagnostics = {**diagnostics, "content_validation": validation}
     usage = diagnostics.get("usage") or {}
     lines += ["", "## AI分析状態", ""]
     if analysis.get("status") == "ok":
@@ -312,7 +338,6 @@ def render(snapshot, history):
 
     lines += ["", "## 重要な発見", ""]
     if analysis.get("status") == "ok":
-        result = analysis["result"]
         lines += [f"**AI要約:** {result['summary']}", "", "観測事実:", ""]
         lines.extend(f"- {item}" for item in result["observations"])
         lines += ["", "仮説（因果関係の断定ではありません）:", ""]
