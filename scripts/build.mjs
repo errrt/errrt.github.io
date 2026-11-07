@@ -9,6 +9,7 @@ const requiredFiles = [
   "dist/og-image.png",
   "go/phraseCrate/index.html",
   "go/tabParcel/index.html",
+  "go/tinyExpander/index.html",
   "go/github/index.html",
   "go/x/index.html",
   ".nojekyll",
@@ -35,6 +36,7 @@ for (const copy of requiredCopy) {
 }
 
 const requiredLinks = [
+  "https://apps.apple.com/us/app/tiny-expander/id6821790240",
   "https://github.com/errrt",
   "https://chromewebstore.google.com/detail/phrasecrate/gngjinfejkkiflogppaadaandlenomcd",
   "https://chromewebstore.google.com/detail/tab-parcel/pohjmphoidcblbneaeabbpjhcjjlbhke",

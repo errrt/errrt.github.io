@@ -35,6 +35,7 @@ npm run dev
 Open `http://localhost:4173`. Run the same validation used in CI with:
 
 ```sh
+npm run test
 npm run build
 ```
 
@@ -55,7 +56,7 @@ The site is published automatically after every push to `main`. No build action 
 
 Cloudflare Web Analytics is loaded once from `index.html` with the beacon token currently issued for `errrt.github.io`. The module script is placed before `</body>` so it does not block rendering or alter SEO metadata. Cloudflare's public beacon token and the GraphQL `siteTag` identifier are separate values for this site: keep the beacon token aligned with the installation snippet, and keep `growth-agent.json` aligned with the `siteTag` shown in the Web Analytics overview URL.
 
-PhraseCrate, Tab Parcel, GitHub, and X links use same-origin `/go/<key>/index.html` redirect pages. Those pages load the same Cloudflare beacon before forwarding to the external destination, so daily link clicks can be queried by `requestPath` without adding another analytics vendor. A destination that has not been confirmed remains disabled instead of being guessed.
+PhraseCrate, Tab Parcel, Tiny Expander, GitHub, and X links use same-origin `/go/<key>/index.html` redirect pages. Those pages load the same Cloudflare beacon before forwarding to the external destination, so daily link clicks can be queried by `requestPath` without adding another analytics vendor. A destination that has not been confirmed remains disabled instead of being guessed.
 
 ## Daily Growth Agent
 

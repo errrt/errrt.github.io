@@ -4,6 +4,7 @@
   "private": true,
   "description": "The official home of errrt — tiny software for everyday annoyances.",
   "scripts": {
+    "test": "node --test tests/site-config.test.mjs",
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs"
   }

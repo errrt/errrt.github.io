@@ -1,12 +1,12 @@
 const LINK_TARGETS = {
   phraseCrate: "https://chromewebstore.google.com/detail/phrasecrate/gngjinfejkkiflogppaadaandlenomcd",
   tabParcel: "https://chromewebstore.google.com/detail/tab-parcel/pohjmphoidcblbneaeabbpjhcjjlbhke",
-  tinyExpander: "",
+  tinyExpander: "https://apps.apple.com/us/app/tiny-expander/id6821790240",
   x: "https://x.com/errrt0dev",
   github: "https://github.com/errrt",
 };
 
-const TRACKED_LINKS = new Set(["phraseCrate", "tabParcel", "github", "x"]);
+const TRACKED_LINKS = new Set(["phraseCrate", "tabParcel", "tinyExpander", "github", "x"]);
 const redirectKey = document.body.dataset.redirect;
 
 if (redirectKey) {
