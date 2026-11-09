@@ -9,13 +9,18 @@ const contentTypes = {
   ".js": "text/javascript; charset=utf-8",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".jpg": "image/jpeg",
+  ".txt": "text/plain; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
 };
 
 createServer(async (request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, `http://localhost:${port}`).pathname);
-  const relativePath = pathname === "/" ? "index.html" : pathname.slice(1);
+  const relativePath = pathname.endsWith("/") ? `${pathname.slice(1)}index.html` : pathname.slice(1);
   const isPublicFile =
-    relativePath === "index.html" || relativePath.startsWith("dist/") || relativePath.startsWith("go/");
+    relativePath === "index.html" || relativePath === "phrasecrate/index.html" ||
+    relativePath === "robots.txt" || relativePath === "sitemap.xml" ||
+    relativePath.startsWith("dist/") || relativePath.startsWith("go/");
 
   if (!isPublicFile || relativePath.includes("..")) {
     response.writeHead(404).end("Not found");

@@ -7,7 +7,10 @@ This is a dependency-free static site made for GitHub Pages. GitHub publishes th
 ## File structure
 
 ```text
-index.html          # Page and SEO metadata
+index.html          # Studio homepage with featured PhraseCrate section
+phrasecrate/         # Static product page
+robots.txt           # Crawl policy and sitemap location
+sitemap.xml          # Indexable homepage and product URL
 .nojekyll           # Disables Jekyll processing on GitHub Pages
 dist/
 ├── favicon.svg
@@ -41,7 +44,9 @@ npm run build
 
 ## Update links
 
-All product, X, and GitHub URLs live in `dist/site-config.js`. Replace the empty strings in `LINK_TARGETS`; no HTML editing is needed. Empty URLs are displayed as unavailable links.
+Product, X, and GitHub destinations live in `dist/site-config.js`. When changing a destination, also update its static fallback in `go/<key>/index.html`. HTML links marked `data-link` already point to the tracked `/go/<key>/index.html` route, so they work without JavaScript; the redirect page provides a real external link for manual continuation. Keep these URLs aligned. Empty configured targets are disabled by the script.
+
+The PhraseCrate detail page is `/phrasecrate/`. It reuses the existing 1280×800 site-ranking illustration at `dist/phrasecrate/site-ranking.jpg` (from PhraseCrate's store materials). Keep its plan limits, desktop-only support, and Polar verification wording aligned with the product. `sitemap.xml` lists only the indexable content pages, not the `noindex` tracking redirects. The development server serves the same directory URLs and metadata files.
 
 ## Deploy to GitHub Pages
 
@@ -54,7 +59,7 @@ The site is published automatically after every push to `main`. No build action 
 
 ## Analytics
 
-Cloudflare Web Analytics is loaded once from `index.html` with the beacon token currently issued for `errrt.github.io`. The module script is placed before `</body>` so it does not block rendering or alter SEO metadata. Cloudflare's public beacon token and the GraphQL `siteTag` identifier are separate values for this site: keep the beacon token aligned with the installation snippet, and keep `growth-agent.json` aligned with the `siteTag` shown in the Web Analytics overview URL.
+Cloudflare Web Analytics is loaded once per content page (`index.html` and `phrasecrate/index.html`) with the same beacon token currently issued for `errrt.github.io`. The module script is placed before `</body>` so it does not block rendering or alter SEO metadata. Cloudflare's public beacon token and the GraphQL `siteTag` identifier are separate values for this site: keep the beacon token aligned with the installation snippet, and keep `growth-agent.json` aligned with the `siteTag` shown in the Web Analytics overview URL.
 
 PhraseCrate, Tab Parcel, Tiny Expander, GitHub, and X links use same-origin `/go/<key>/index.html` redirect pages. Those pages load the same Cloudflare beacon before forwarding to the external destination, so daily link clicks can be queried by `requestPath` without adding another analytics vendor. A destination that has not been confirmed remains disabled instead of being guessed.
 
