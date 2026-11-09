@@ -37,7 +37,7 @@ for (const [key, target] of Object.entries(destinations)) {
     const lp = await readFile("index.html", "utf8");
     assert.ok(html.includes(`data-redirect="${key}"`));
     assert.ok(html.includes('src="../../dist/site-config.js" defer'));
-    assert.ok(html.includes("data-redirect-target"));
+    assert.ok(html.includes(`data-redirect-target href="${target}"`));
     assert.ok(html.includes('name="robots" content="noindex"'));
     assert.ok(html.includes("https://static.cloudflareinsights.com/beacon.min.js"));
     assert.equal(html.match(/data-cf-beacon='([^']+)'/)[1], lp.match(/data-cf-beacon='([^']+)'/)[1]);

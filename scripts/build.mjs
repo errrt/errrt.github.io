@@ -2,6 +2,10 @@ import { access, readFile } from "node:fs/promises";
 
 const requiredFiles = [
   "index.html",
+  "phrasecrate/index.html",
+  "robots.txt",
+  "sitemap.xml",
+  "dist/phrasecrate/site-ranking.jpg",
   "dist/styles.css",
   "dist/site-config.js",
   "dist/favicon.svg",
