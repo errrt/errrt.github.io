@@ -70,7 +70,7 @@ GitHub Actions starts the report at 04:30 JST every day so it can finish before 
 - `growth-report-<run id>`: `snapshot.json` and the Japanese `report.md`
 - `growth-history`: rolling daily snapshots used for previous-day, 7-day, and 30-day comparisons
 
-The Markdown report is also written to the workflow's **Summary** page. Missing and failed values remain `null`/`—`; they are never converted to zero. In particular, an empty Cloudflare GraphQL result is recorded as missing with the queried UTC window, not as zero traffic. A deterministic report is always generated, while OpenAI analysis is optional. The Summary includes an explicit AI analysis status and states when the report used the rule-based fallback.
+The Markdown report is also written to the workflow's **Summary** page. Missing and failed values remain `null`/`—`; they are never converted to zero. A successful empty Cloudflare aggregate is a confirmed zero, while authentication, GraphQL, and account errors remain failures. A deterministic report is always generated, while OpenAI analysis is optional. The Summary includes explicit AI and collection-quality states. See [the data quality contract](docs/growth-data-quality.md) for state semantics, safe backfill, and the optional CI gate.
 
 Run it locally with yesterday's JST date:
 
@@ -112,7 +112,7 @@ The collector uses this order:
 1. Official API v2 for `installs`, `uninstalls`, `impressions`, `page-views`, `users`, and `users-7d`, plus `install-source` and `utm-source` where the API returns them.
 2. A normalized official CSV at `imports/chrome-web-store/<slug>.csv` only when API authentication or the request fails.
 
-Every run re-queries the preceding 30 dates so delayed data can replace earlier pending values. Raw API responses and normalized daily rows are saved under `growth-history/chrome-web-store/` and copied into the report artifact. A returned numeric zero is stored as `observed`; absent metrics are `null` with `missing`, and dates after the latest returned API row are `pending`. The API exposes no explicit finalization flag, so `pending` is an agent-side state, not a Google guarantee.
+Every run re-queries the preceding 30 dates so delayed data can replace earlier pending values. Raw API responses and normalized daily rows are saved under `growth-history/chrome-web-store/` and copied into the report artifact. Requested metric columns omitted from a returned date row are sparse zeros and retain explicit provenance; a missing date row is never inferred as zero. Dates after the latest returned API row are `pending`. The API exposes no explicit finalization flag, so `pending` is an agent-side state, not a Google guarantee.
 
 Dimension queries are intentionally separate: `install-source` is queried with `installs`, while `utm-source` is queried with `page-views`. A dimension request failure is recorded as `failed` with a null value and never converted to zero.
 

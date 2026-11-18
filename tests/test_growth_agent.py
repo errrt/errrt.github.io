@@ -8,12 +8,14 @@ import os
 from growth_agent.ai import analyze, log_line, _validate_content
 from growth_agent.metrics import CWS_ACTIVE_USER_DEFINITIONS
 from growth_agent.report import build_actions, render
+from growth_agent.quality import evaluate_quality
 from growth_agent.collectors import (
     _cws_url,
     _cws_metrics,
     _empty_day,
     _conversion,
     _period,
+    _merge_cws_daily,
     _utc_range,
     collect_chrome_web_store,
     collect_cloudflare,
@@ -250,7 +252,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result["metrics"]["outbound_clicks"], {"phraseCrate": 2, "tabParcel": 3, "tinyExpander": 3})
 
     @patch("growth_agent.collectors.request_json")
-    def test_cloudflare_empty_response_is_missing_not_zero(self, request_json):
+    def test_cloudflare_empty_success_is_confirmed_zero(self, request_json):
         request_json.return_value = {"data": {"viewer": {"accounts": [{
             "totals": [],
             "referrers": [],
@@ -258,9 +260,11 @@ class ReportTests(unittest.TestCase):
         }]}}}
         with patch.dict(os.environ, {"CLOUDFLARE_API_TOKEN": "token", "CLOUDFLARE_ACCOUNT_ID": "account"}):
             result = collect_cloudflare({"site_tag": "site"}, date(2026, 10, 22), "Asia/Tokyo")
-        self.assertEqual(result["status"], "missing")
-        self.assertIsNone(result["metrics"])
-        self.assertIn("unknown, not a confirmed zero", result["error"])
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["reason_code"], "confirmed_zero")
+        self.assertEqual(result["metrics"]["page_views"], 0)
+        self.assertEqual(result["metrics"]["visits"], 0)
+        self.assertEqual(result["metrics"]["metric_states"]["unique_users"], "unavailable")
         self.assertEqual(result["query_window"]["start"], "2026-10-21T15:00:00Z")
 
     @patch("growth_agent.collectors.request_json")
@@ -299,17 +303,19 @@ class ReportTests(unittest.TestCase):
         metrics = result["phrasecrate"]["metrics"]
         self.assertEqual(metrics["daily"]["2026-10-20"]["installs"], 0)
         self.assertEqual(metrics["daily"]["2026-10-20"]["metric_states"]["installs"], "observed")
-        self.assertIsNone(metrics["daily"]["2026-10-20"]["uninstalls"])
-        self.assertEqual(metrics["daily"]["2026-10-20"]["metric_states"]["uninstalls"], "missing")
+        self.assertEqual(metrics["daily"]["2026-10-20"]["uninstalls"], 0)
+        self.assertEqual(metrics["daily"]["2026-10-20"]["metric_states"]["uninstalls"], "observed")
+        self.assertEqual(metrics["daily"]["2026-10-20"]["metric_provenance"]["uninstalls"], "api_sparse_zero")
         self.assertEqual(metrics["daily"]["2026-10-22"]["metric_states"]["installs"], "pending")
         self.assertEqual(metrics["periods"]["1d"]["installs"]["state"], "pending")
         self.assertEqual(metrics["periods"]["30d"]["installs"]["value"], 2)
         self.assertEqual(metrics["periods"]["30d"]["installs"]["observed_days"], 2)
-        self.assertIsNone(metrics["periods"]["30d"]["uninstalls"]["value"])
-        self.assertEqual(metrics["periods"]["30d"]["uninstalls"]["observed_days"], 0)
+        self.assertEqual(metrics["periods"]["30d"]["uninstalls"]["value"], 0)
+        self.assertEqual(metrics["periods"]["30d"]["uninstalls"]["observed_days"], 2)
         self.assertEqual(metrics["source_breakdown_30d"]["install_source"]["values"]["organic"]["installs"], 2)
-        self.assertEqual(metrics["source_breakdown_30d"]["install_source"]["observed_days"], 1)
+        self.assertEqual(metrics["source_breakdown_30d"]["install_source"]["observed_days"], 2)
         self.assertEqual(metrics["source_breakdown_30d"]["utm_source"]["values"]["newsletter"]["page_views"], 5)
+        self.assertEqual(metrics["source_breakdown_30d"]["utm_source"]["observed_days"], 2)
         self.assertEqual(len(raw["base"]), 2)
         self.assertIn("2026-10-21", normalized["daily"])
         self.assertIn("pageToken=next", request_json.call_args_list[1].args[0])
@@ -392,6 +398,50 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("Bearer", persisted)
         self.assertEqual(raw_dates, {"2026-10-22", "2026-10-23"})
 
+    def test_history_merge_preserves_observation_against_pending_and_sparse_zero(self):
+        old = _empty_day()
+        old["installs"] = 7
+        old["metric_states"]["installs"] = "observed"
+        existing = {"2026-10-20": old}
+
+        pending = _empty_day("pending")
+        merged = _merge_cws_daily(existing, {"2026-10-20": pending})
+        self.assertEqual(merged["2026-10-20"]["installs"], 7)
+
+        sparse = _empty_day("observed")
+        sparse["installs"] = 0
+        sparse["metric_provenance"]["installs"] = "api_sparse_zero"
+        merged = _merge_cws_daily(merged, {"2026-10-20": sparse})
+        self.assertEqual(merged["2026-10-20"]["installs"], 7)
+
+        corrected = _empty_day("observed")
+        corrected["installs"] = 9
+        corrected["metric_provenance"]["installs"] = "api_value"
+        merged = _merge_cws_daily(merged, {"2026-10-20": corrected})
+        self.assertEqual(merged["2026-10-20"]["installs"], 9)
+
+    def test_quality_separates_pending_auth_failure_and_policy_limitation(self):
+        snapshot = self.snapshot()
+        snapshot["sources"]["cloudflare"] = {
+            "status": "error", "reason_code": "authentication_error", "error": "HTTP 403", "metrics": None,
+        }
+        snapshot["sources"]["x"] = {
+            "status": "missing", "error": "X API reads are paid", "metrics": None,
+        }
+        snapshot["sources"]["github"]["metrics"]["errrt/errrt.github.io"] = {
+            "status": "partial", "error": "Traffic metrics unavailable: HTTP 403", "metrics": {"stars": 3},
+        }
+        quality = evaluate_quality(snapshot)
+        self.assertEqual(quality["status"], "error")
+        reasons = {issue["reason_code"] for issue in quality["issues"]}
+        self.assertIn("authentication_error", reasons)
+        self.assertIn("paid_source_not_configured", reasons)
+
+    def test_quality_detects_history_restore_gap(self):
+        snapshot = self.snapshot()
+        quality = evaluate_quality(snapshot, [{"date": "2026-10-20"}])
+        self.assertIn("history_gap", {issue["reason_code"] for issue in quality["issues"]})
+
     @patch("growth_agent.collectors.request_json", side_effect=RuntimeError("API denied"))
     def test_cws_api_failure_uses_csv_without_scraping(self, _request_json):
         config = {"products": [{"slug": "phrasecrate", "item_id": "item"}]}
@@ -405,12 +455,14 @@ class ReportTests(unittest.TestCase):
             )
             with patch.dict(os.environ, {"CWS_ACCESS_TOKEN": "token", "CWS_PUBLISHER_ID": "publisher"}):
                 result = collect_chrome_web_store(config, date(2026, 10, 22), imports, Path(directory) / "history")
+            stored = json.loads((Path(directory) / "history/normalized/phrasecrate.json").read_text())
         source = result["phrasecrate"]
         self.assertEqual(source["status"], "partial")
         self.assertEqual(source["metrics"]["data_source"], "official_csv")
         self.assertEqual(source["metrics"]["installs"], 1)
         self.assertIsNone(source["metrics"]["uninstalls"])
         self.assertIn("API denied", source["error"])
+        self.assertEqual(stored["daily"]["2026-10-22"]["installs"], 1)
 
     def test_cws_missing_auth_is_not_zero(self):
         config = {"products": [{"slug": "phrasecrate", "item_id": "item"}]}
