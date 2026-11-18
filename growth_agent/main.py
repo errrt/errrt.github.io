@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from .ai import analyze, log_line
 from .collectors import collect_chrome_web_store, collect_cloudflare, collect_github, collect_x
 from .report import build_actions, load_history, render
+from .quality import evaluate_quality
 
 
 def main():
@@ -17,6 +18,10 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("growth-output"))
     parser.add_argument("--history-dir", type=Path, default=Path("growth-history"))
     parser.add_argument("--imports-dir", type=Path, default=Path("imports/chrome-web-store"))
+    parser.add_argument(
+        "--quality-gate", choices=("off", "error", "degraded"), default="off",
+        help="Exit 2 after writing diagnostics when collection quality crosses this threshold",
+    )
     args = parser.parse_args()
 
     config = json.loads(args.config.read_text(encoding="utf-8"))
@@ -38,6 +43,7 @@ def main():
             "github": collect_github(config["github"], report_date, config.get("timezone", "Asia/Tokyo")),
         },
     }
+    snapshot["collection_quality"] = evaluate_quality(snapshot, history)
     snapshot["analysis"] = analyze(snapshot, history)
     print(log_line(snapshot["analysis"]))
     snapshot["actions"] = build_actions(snapshot, history)
@@ -51,6 +57,12 @@ def main():
         shutil.copytree(cws_history, args.output_dir / "chrome-web-store", dirs_exist_ok=True)
     (args.history_dir / f"{report_date.isoformat()}.json").write_text(snapshot_json, encoding="utf-8")
     print(args.output_dir / "report.md")
+    quality = snapshot["collection_quality"]["status"]
+    if (args.quality_gate == "error" and quality == "error") or (
+        args.quality_gate == "degraded" and quality != "ok"
+    ):
+        print(f"::error title=Growth data quality gate::collection_quality={quality}")
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

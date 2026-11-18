@@ -33,11 +33,22 @@ jobs:
       - name: Restore recent growth history
         env:
           GH_TOKEN: ${{ github.token }}
+          REPORT_DATE: ${{ inputs.report_date || '' }}
         run: |
+          report_date="${REPORT_DATE:-$(TZ=Asia/Tokyo date -d yesterday +%F)}"
+          expected_previous="$(date -d "$report_date - 1 day" +%F)"
           previous_run="$(gh run list --workflow daily-growth.yml --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
-          if [ -n "$previous_run" ]; then
-            gh run download "$previous_run" --name growth-history --dir growth-history || true
-          fi
+          test -n "$previous_run"
+          gh run download "$previous_run" --name growth-history --dir growth-history
+          test -f "growth-history/$expected_previous.json"
+
+      - name: Repair restored growth history
+        run: |
+          python -m scripts.backfill_growth_history growth-history repaired-growth-history
+          cp repaired-growth-history/snapshots/*.json growth-history/
+          cp repaired-growth-history/normalized/*.json growth-history/chrome-web-store/normalized/
+          mkdir -p growth-output
+          cp repaired-growth-history/backfill-audit.json repaired-growth-history/backfill-summary.md growth-output/
 
       - id: google-auth
         name: Authenticate with Google Cloud WIF
@@ -71,10 +82,11 @@ jobs:
           if [ -n "$REPORT_DATE" ]; then
             args+=(--date "$REPORT_DATE")
           fi
-          python -m growth_agent.main "${args[@]}"
+          python -m growth_agent.main "${args[@]}" --quality-gate error
           cat growth-output/report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload report
+        if: always() && hashFiles('growth-output/**') != ''
         uses: actions/upload-artifact@v7
         with:
           name: growth-report-${{ github.run_id }}

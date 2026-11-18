@@ -62,7 +62,7 @@ def _period_cell(source, period, metric):
     kind = "日別合計" if period_is_complete(value) else ("未観測" if value.get("value") is None else "部分合計")
     counts = ", ".join(
         f"{state} {value.get(state + '_days', '不明')}日"
-        for state in ("missing", "pending", "failed")
+        for state in ("missing", "pending", "failed", "unavailable")
     )
     return (
         f"{total} ({kind}; 観測 {value.get('observed_days', '不明')}/{value.get('expected_days', '不明')}日; "
@@ -179,10 +179,26 @@ def render(snapshot, history):
         else:
             source_groups_ok += int(source.get("status") in ("ok", "partial"))
 
+    quality = snapshot.get("collection_quality") or {"status": "unknown", "counts": {}, "issues": []}
+    quality_counts = quality.get("counts", {})
     lines = [
         f"# errrt Daily Growth Report — {snapshot['date']}", "", "## Executive Summary", "",
+        f"データ品質: **{quality.get('status', 'unknown')}**（欠損率 {quality.get('missing_rate', 0):.1%}; "
+        f"observed {quality_counts.get('observed', 0)}, pending {quality_counts.get('pending', 0)}, "
+        f"missing {quality_counts.get('missing', 0)}, failed {quality_counts.get('failed', 0)}, "
+        f"仕様・方針上の取得対象外 {quality_counts.get('unavailable', 0)}）。",
         f"全{len(snapshot['sources'])}データソース群のうち{source_groups_ok}群から利用可能なデータを取得しました。"
         f"欠損は「—」で示し、ゼロとして扱いません。重複を除いた本日の推奨アクションは{len(actions)}件です。",
+        "", "## データ品質判定", "",
+    ]
+    if quality.get("issues"):
+        lines.extend(
+            f"- [{issue['severity']}] `{issue['source']}` / `{issue['reason_code']}`: {_one_line(issue['message'])}"
+            for issue in quality["issues"]
+        )
+    else:
+        lines.append("- なし")
+    lines += [
         "", "## プロダクト別KPI", "",
         "| プロダクト | PV | 訪問 | install | active users | GitHub Stars | X投稿 |",
         "|---|---:|---:|---:|---:|---:|---:|",

@@ -65,5 +65,8 @@ def period_is_complete(value):
         and value.get("value") is not None
         and expected > 0
         and value.get("observed_days") == expected
-        and all(value.get(key, 0) == 0 for key in ("missing_days", "pending_days", "failed_days"))
+        and all(
+            value.get(key, 0) == 0
+            for key in ("missing_days", "pending_days", "failed_days", "unavailable_days")
+        )
     )

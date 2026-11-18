@@ -11,11 +11,15 @@ from .metrics import period_is_complete
 
 
 def missing(reason):
-    return {"status": "missing", "error": reason, "metrics": None}
+    return {"status": "missing", "error": reason, "reason_code": "configuration_missing", "metrics": None}
 
 
 def failed(error):
-    return {"status": "error", "error": str(error), "metrics": None}
+    message = str(error)
+    reason_code = "authentication_error" if any(
+        marker in message.lower() for marker in ("http 401", "http 403", "unauthenticated", "permission")
+    ) else "fetch_error"
+    return {"status": "error", "error": message, "reason_code": reason_code, "metrics": None}
 
 
 def _utc_range(report_date, timezone_name):
@@ -65,14 +69,22 @@ def collect_cloudflare(config, report_date, timezone_name):
             raise RuntimeError("No Cloudflare account data returned")
         totals = accounts[0]["totals"]
         if not totals:
+            # A successful aggregate query with no groups means that no RUM
+            # pageload events matched the window. Authentication and query
+            # failures take the exception path and must never become zero.
             return {
-                "status": "missing",
-                "error": (
-                    "Cloudflare returned no rows for "
-                    f"{start} to {end}; the result is unknown, not a confirmed zero"
-                ),
-                "metrics": None,
+                "status": "ok",
+                "error": None,
+                "reason_code": "confirmed_zero",
                 "query_window": {"start": start, "end": end},
+                "metrics": {
+                    "page_views": 0, "raw_page_views": 0, "visits": 0,
+                    "unique_users": None, "referrers": [], "outbound_clicks": {},
+                    "metric_states": {
+                        "page_views": "observed", "raw_page_views": "observed",
+                        "visits": "observed", "unique_users": "unavailable",
+                    },
+                },
             }
         raw_page_views = sum(row.get("count", 0) for row in totals)
         visits = sum(row.get("sum", {}).get("visits", 0) for row in totals)
@@ -86,9 +98,13 @@ def collect_cloudflare(config, report_date, timezone_name):
             if len(path_parts) >= 2 and path_parts[0] == "go":
                 outbound_clicks[path_parts[1]] = outbound_clicks.get(path_parts[1], 0) + row.get("count", 0)
         page_views = max(raw_page_views - sum(outbound_clicks.values()), 0)
-        return {"status": "ok", "error": None, "query_window": {"start": start, "end": end}, "metrics": {
+        return {"status": "ok", "error": None, "reason_code": "observed", "query_window": {"start": start, "end": end}, "metrics": {
             "page_views": page_views, "raw_page_views": raw_page_views, "visits": visits,
             "unique_users": None, "referrers": referrers, "outbound_clicks": outbound_clicks,
+            "metric_states": {
+                "page_views": "observed", "raw_page_views": "observed",
+                "visits": "observed", "unique_users": "unavailable",
+            },
         }}
     except Exception as error:
         return failed(error)
@@ -151,8 +167,10 @@ def _empty_day(state="missing"):
         "users": None,
         "users_7d": None,
         "metric_states": {metric.replace("-", "_"): state for metric in CWS_METRICS},
+        "metric_provenance": {},
         "install_sources": None,
         "utm_sources": None,
+        "dimension_states": {"install_sources": state, "utm_sources": state},
     }
 
 
@@ -173,15 +191,37 @@ def _normalize_cws_pages(base_pages, dimension_pages, first_date, last_date):
                 key = metric.get("metric", "").replace("-", "_")
                 if key in target["metric_states"]:
                     target[key] = _metric_value(metric)
-                    target["metric_states"][key] = "observed"
+                    if target[key] is not None:
+                        target["metric_states"][key] = "observed"
+                        target["metric_provenance"][key] = "api_value"
 
     # The API does not expose a finalization flag. Dates after its latest returned
     # date are marked pending, rather than being converted to zeros.
+    returned_date_set = set(returned_dates)
     latest_returned = max(returned_dates, default=None)
+    available_dimension_fields = {
+        "install_sources" if dimension == "install-source" else "utm_sources"
+        for dimension in dimension_pages
+    }
     if latest_returned:
         for day, values in dates.items():
             if day > latest_returned:
                 values["metric_states"] = {key: "pending" for key in values["metric_states"]}
+                values["dimension_states"] = {key: "pending" for key in values["dimension_states"]}
+            elif day in returned_date_set:
+                # queryMetrics uses sparse metric columns: a finalized date row
+                # contains positive values, while requested counts omitted from
+                # that row are zero. Preserve the inference explicitly so a
+                # later merge cannot replace a stored positive observation with
+                # a sparse zero.
+                for key, state in values["metric_states"].items():
+                    if state == "missing":
+                        values[key] = 0
+                        values["metric_states"][key] = "observed"
+                        values["metric_provenance"][key] = "api_sparse_zero"
+                for field in available_dimension_fields:
+                    values["dimension_states"][field] = "observed"
+                    values[field] = values[field] or {}
 
     for dimension, pages in dimension_pages.items():
         field = "install_sources" if dimension == "install-source" else "utm_sources"
@@ -190,6 +230,7 @@ def _normalize_cws_pages(base_pages, dimension_pages, first_date, last_date):
                 day = _cws_date(row)
                 values = dates.setdefault(day, _empty_day())
                 values[field] = values[field] or {}
+                values["dimension_states"][field] = "observed"
                 label = (row.get("dimensionValues") or ["unknown"])[0]
                 values[field][label] = {
                     metric.get("metric", "").replace("-", "_"): _metric_value(metric)
@@ -210,7 +251,10 @@ def _period(daily, last_date, days):
         ]
         observed = [day for day, state in zip(selected, states) if state == "observed"]
         values = [daily[day][metric] for day in observed if daily[day].get(metric) is not None]
-        state_counts = {state: states.count(state) for state in ("observed", "pending", "missing", "failed")}
+        state_counts = {
+            state: states.count(state)
+            for state in ("observed", "pending", "missing", "failed", "unavailable")
+        }
         if state_counts["observed"] == days:
             aggregate_state = "observed"
         elif state_counts["observed"]:
@@ -219,6 +263,8 @@ def _period(daily, last_date, days):
             aggregate_state = "failed"
         elif state_counts["pending"]:
             aggregate_state = "pending"
+        elif state_counts["unavailable"]:
+            aggregate_state = "unavailable"
         else:
             aggregate_state = "missing"
         output[metric] = {
@@ -229,6 +275,7 @@ def _period(daily, last_date, days):
             "pending_days": state_counts["pending"],
             "missing_days": state_counts["missing"],
             "failed_days": state_counts["failed"],
+            "unavailable_days": state_counts["unavailable"],
         }
     return output
 
@@ -270,8 +317,9 @@ def _source_summary(daily, last_date, days, field, error=None):
     totals = {}
     observed_days = 0
     for offset in range(days):
-        values = daily.get((last_date - timedelta(days=offset)).isoformat(), {}).get(field) or {}
-        if values:
+        day = daily.get((last_date - timedelta(days=offset)).isoformat(), {})
+        values = day.get(field) or {}
+        if day.get("dimension_states", {}).get(field) == "observed":
             observed_days += 1
         for source, metrics in values.items():
             target = totals.setdefault(source, {})
@@ -331,6 +379,7 @@ def _read_cws_csv(path, first_date, last_date):
             if raw not in (None, ""):
                 values[key] = int(float(raw))
                 values["metric_states"][key] = "observed"
+                values["metric_provenance"][key] = "official_csv"
         source = row.get("acquisition_source", row.get("Acquisition Source"))
         if source:
             values["install_sources"] = {source: {"installs": values["installs"]}}
@@ -342,26 +391,74 @@ def _read_cws_csv(path, first_date, last_date):
     return daily
 
 
+def _load_cws_daily(storage_dir, slug):
+    normalized_path = storage_dir / "normalized" / f"{slug}.json"
+    if not normalized_path.exists():
+        return {}
+    try:
+        return json.loads(normalized_path.read_text(encoding="utf-8")).get("daily", {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _merge_cws_daily(existing, incoming):
+    merged = json.loads(json.dumps(existing))
+    for day, new_day in incoming.items():
+        if day not in merged:
+            merged[day] = new_day
+            continue
+        old_day = merged[day]
+        old_states = old_day.setdefault("metric_states", {})
+        old_provenance = old_day.setdefault("metric_provenance", {})
+        for metric, new_state in new_day.get("metric_states", {}).items():
+            old_state = old_states.get(metric, "missing")
+            new_value = new_day.get(metric)
+            new_provenance = new_day.get("metric_provenance", {}).get(metric)
+            # Never let pending/missing erase a known observation. An inferred
+            # sparse zero also cannot erase an explicit stored value.
+            if new_state != "observed":
+                if old_state != "observed":
+                    old_states[metric] = new_state
+                continue
+            if new_provenance == "api_sparse_zero" and old_state == "observed" and old_day.get(metric) not in (None, 0):
+                continue
+            old_day[metric] = new_value
+            old_states[metric] = "observed"
+            if new_provenance:
+                old_provenance[metric] = new_provenance
+        old_dimension_states = old_day.setdefault("dimension_states", {})
+        for field in ("install_sources", "utm_sources"):
+            new_state = new_day.get("dimension_states", {}).get(field, "missing")
+            if new_state == "observed":
+                # Dimension rows are additive categories for one day. A fresh
+                # successful query is authoritative, including an empty map.
+                old_day[field] = new_day.get(field) or {}
+                old_dimension_states[field] = "observed"
+            elif old_dimension_states.get(field) != "observed":
+                old_dimension_states[field] = new_state
+    return merged
+
+
+def _save_cws_normalized(storage_dir, slug, daily, fetched_at):
+    normalized_dir = storage_dir / "normalized"
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    normalized_path = normalized_dir / f"{slug}.json"
+    existing = _load_cws_daily(storage_dir, slug)
+    merged = _merge_cws_daily(existing, daily)
+    normalized_path.write_text(
+        json.dumps({"product": slug, "updated_at": fetched_at, "daily": merged}, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return merged
+
+
 def _save_cws_data(storage_dir, slug, report_date, raw, daily, fetched_at):
     raw_dir = storage_dir / "raw" / slug
-    normalized_dir = storage_dir / "normalized"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    normalized_dir.mkdir(parents=True, exist_ok=True)
     (raw_dir / f"{report_date.isoformat()}.json").write_text(
         json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    normalized_path = normalized_dir / f"{slug}.json"
-    existing = {}
-    if normalized_path.exists():
-        try:
-            existing = json.loads(normalized_path.read_text(encoding="utf-8")).get("daily", {})
-        except (OSError, json.JSONDecodeError):
-            existing = {}
-    existing.update(daily)
-    normalized_path.write_text(
-        json.dumps({"product": slug, "updated_at": fetched_at, "daily": existing}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    return _save_cws_normalized(storage_dir, slug, daily, fetched_at)
 
 
 def collect_chrome_web_store(config, report_date, imports_dir, storage_dir=None, timezone_name="Asia/Tokyo"):
@@ -398,7 +495,7 @@ def collect_chrome_web_store(config, report_date, imports_dir, storage_dir=None,
                     "dimensions": dimension_pages,
                     "dimension_errors": dimension_errors,
                 }
-                _save_cws_data(storage_dir, slug, report_date, raw, daily, fetched_at)
+                daily = _save_cws_data(storage_dir, slug, report_date, raw, daily, fetched_at)
                 limitations = (
                     "Dimension queries were unavailable: "
                     + "; ".join(f"{dimension}: {error}" for dimension, error in dimension_errors.items())
@@ -420,6 +517,7 @@ def collect_chrome_web_store(config, report_date, imports_dir, storage_dir=None,
             continue
         try:
             daily = _read_cws_csv(path, first_date, report_date)
+            daily = _save_cws_normalized(storage_dir, slug, daily, fetched_at)
             metrics = _cws_metrics(
                 daily, report_date, "official_csv", fetched_at,
                 f"Official API unavailable ({api_error}); using the CSV fallback.",
