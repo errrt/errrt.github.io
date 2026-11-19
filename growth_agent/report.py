@@ -172,6 +172,7 @@ def _previous_action_result(action, snapshot):
 def render(snapshot, history):
     actions = snapshot["actions"]
     cf = snapshot["sources"]["cloudflare"]
+    analysis = snapshot.get("analysis", {})
     source_groups_ok = 0
     for name, source in snapshot["sources"].items():
         if name == "chrome_web_store":
@@ -189,6 +190,11 @@ def render(snapshot, history):
         f"仕様・方針上の取得対象外 {quality_counts.get('unavailable', 0)}）。",
         f"全{len(snapshot['sources'])}データソース群のうち{source_groups_ok}群から利用可能なデータを取得しました。"
         f"欠損は「—」で示し、ゼロとして扱いません。重複を除いた本日の推奨アクションは{len(actions)}件です。",
+        (
+            "AI分析: **成功**（ルールベースへのフォールバックなし）。"
+            if analysis.get("status") == "ok"
+            else f"AI分析: **失敗または未設定**（`{analysis.get('fallback') or 'rule_based'}`へフォールバック）。"
+        ),
         "", "## データ品質判定", "",
     ]
     if quality.get("issues"):
@@ -324,7 +330,6 @@ def render(snapshot, history):
     if snapshot["sources"]["x"].get("status") != "ok":
         lines.append("- 計測上の制約: X投稿指標が欠損しており、投稿→LP流入の寄与を分離できない。")
 
-    analysis = snapshot.get("analysis", {})
     diagnostics = analysis.get("diagnostics") or {}
     if analysis.get("status") == "ok":
         result, validation = _validate_content(analysis["result"], snapshot)
@@ -333,10 +338,12 @@ def render(snapshot, history):
     usage = diagnostics.get("usage") or {}
     lines += ["", "## AI分析状態", ""]
     if analysis.get("status") == "ok":
+        input_details = diagnostics.get("input") or {}
         lines.append(
             f"- 成功（Structured Outputs / model: `{diagnostics.get('model') or '不明'}` / "
             f"response: `{diagnostics.get('response_id') or '不明'}` / input tokens: {_fmt(usage.get('input_tokens'))} / "
-            f"output tokens: {_fmt(usage.get('output_tokens'))}）"
+            f"output tokens: {_fmt(usage.get('output_tokens'))} / input bytes: {_fmt(input_details.get('input_bytes'))} / "
+            f"limit: {_fmt(input_details.get('limit_bytes'))} / compaction: `{input_details.get('compaction') or '不明'}`）"
         )
         content_validation = diagnostics.get("content_validation") or {}
         if content_validation.get("status") == "sanitized":
