@@ -5,7 +5,13 @@ from pathlib import Path
 import json
 import os
 
-from growth_agent.ai import analyze, log_line, _validate_content
+from growth_agent.ai import (
+    analyze,
+    log_line,
+    _build_analysis_context,
+    _prepare_analysis_input,
+    _validate_content,
+)
 from growth_agent.metrics import CWS_ACTIVE_USER_DEFINITIONS
 from growth_agent.report import build_actions, render
 from growth_agent.quality import evaluate_quality
@@ -85,6 +91,7 @@ class ReportTests(unittest.TestCase):
         snapshot["actions"] = build_actions(snapshot, [])
         report = render(snapshot, [])
         self.assertIn("## AI分析状態", report)
+        self.assertIn("AI分析: **失敗または未設定**", report)
         self.assertIn("ルールベース分析へフォールバック", report)
         self.assertIn("reason=max_output_tokens", report)
 
@@ -584,6 +591,106 @@ class AIAnalysisTests(unittest.TestCase):
                 "output_tokens_details": {"reasoning_tokens": 100},
             },
         }
+
+    def test_analysis_context_keeps_kpis_and_quality_without_raw_history(self):
+        snapshot = self._cws_snapshot()
+        snapshot.update({
+            "date": "2026-11-18",
+            "collection_quality": {
+                "status": "degraded",
+                "counts": {"observed": 10, "pending": 1, "missing": 0, "failed": 0, "unavailable": 1},
+                "missing_rate": 0.0,
+                "issues": [{
+                    "severity": "warning", "source": "chrome_web_store/phrasecrate/installs",
+                    "reason_code": "provider_pending", "message": "pending=1",
+                }],
+            },
+            "actions": [{"large": "not sent"}],
+            "analysis": {"result": {"large": "not sent"}},
+        })
+        for store in snapshot["sources"]["chrome_web_store"].values():
+            store["metrics"].update({
+                "daily": {"2026-11-18": {"installs": 99}},
+                "periods": {
+                    period: {
+                        metric: {
+                            "value": None if period == "1d" else 7,
+                            "state": "pending" if period == "1d" else "observed",
+                            "observed_days": 0 if period == "1d" else int(period[:-1]),
+                            "expected_days": int(period[:-1]),
+                            "pending_days": 1 if period == "1d" else 0,
+                            "missing_days": 0,
+                            "failed_days": 0,
+                            "unavailable_days": 0,
+                        }
+                        for metric in ("installs", "uninstalls", "impressions", "page_views")
+                    }
+                    for period in ("1d", "7d", "30d")
+                },
+                "active_users": {
+                    "users": {"value": 2, "date": "2026-11-17", "state": "observed"},
+                    "users_7d": {"value": 4, "date": "2026-11-17", "state": "observed"},
+                },
+            })
+
+        context = _build_analysis_context(snapshot, [snapshot])
+        serialized = json.dumps(context, ensure_ascii=False)
+        phrasecrate = context["kpis"]["chrome_web_store"]["phrasecrate"]
+        self.assertEqual(phrasecrate["periods"]["1d"]["installs"]["state"], "pending")
+        self.assertEqual(phrasecrate["periods"]["7d"]["installs"]["value"], 7)
+        self.assertEqual(context["report"]["data_quality"]["counts"]["pending"], 1)
+        self.assertNotIn('"daily"', serialized)
+        self.assertNotIn('"actions"', serialized)
+        self.assertNotIn('"analysis"', serialized)
+
+    @patch("growth_agent.ai.request_json")
+    def test_input_limit_drops_optional_data_but_preserves_required_kpis(self, request_json):
+        result_json = {
+            "summary": "要約", "observations": ["観測"],
+            "hypotheses": ["仮説"], "opportunities": ["機会"],
+        }
+        request_json.return_value = self._completed_payload(json.dumps(result_json, ensure_ascii=False))
+        snapshot = self._cws_snapshot()
+        snapshot.update({"date": "2026-11-18", "collection_quality": {"status": "ok", "issues": []}})
+        large_breakdown = {str(index): {"installs": index} for index in range(2000)}
+        for store in snapshot["sources"]["chrome_web_store"].values():
+            store["metrics"].update({
+                "periods": {},
+                "active_users": {},
+                "source_breakdown_30d": {"install_source": {"values": large_breakdown}},
+            })
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini",
+            "OPENAI_MAX_INPUT_BYTES": "16000",
+        }):
+            analysis = analyze(snapshot, [])
+
+        self.assertEqual(analysis["status"], "ok")
+        input_details = analysis["diagnostics"]["input"]
+        self.assertLessEqual(input_details["input_bytes"], 16000)
+        self.assertEqual(input_details["compaction"], "drop_optional_breakdowns")
+        sent = json.loads(request_json.call_args.kwargs["body"]["input"])
+        self.assertNotIn("breakdowns", sent)
+        self.assertIn("periods", sent["kpis"]["chrome_web_store"]["phrasecrate"])
+
+    @patch("growth_agent.ai.request_json")
+    def test_critical_payload_over_limit_fails_before_api_call(self, request_json):
+        snapshot = {"date": "2026-11-18", "sources": {"chrome_web_store": {}},
+                    "collection_quality": {"status": "error", "issues": []}}
+        for index in range(100):
+            snapshot["sources"]["chrome_web_store"][f"product-{index}"] = {
+                "status": "error", "error": "x" * 500, "metrics": None,
+            }
+        with patch.dict(os.environ, {
+            "OPENAI_API_KEY": "secret", "OPENAI_MODEL": "gpt-5-mini",
+            "OPENAI_MAX_INPUT_BYTES": "4096",
+        }):
+            analysis = analyze(snapshot, [])
+
+        self.assertEqual(analysis["status"], "error")
+        self.assertEqual(analysis["fallback"], "rule_based")
+        self.assertIn("required KPI", analysis["error"])
+        request_json.assert_not_called()
 
     @patch("growth_agent.ai.request_json")
     def test_structured_output_is_parsed_after_completed_status(self, request_json):

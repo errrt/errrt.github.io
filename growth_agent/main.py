@@ -46,6 +46,12 @@ def main():
     snapshot["collection_quality"] = evaluate_quality(snapshot, history)
     snapshot["analysis"] = analyze(snapshot, history)
     print(log_line(snapshot["analysis"]))
+    if snapshot["analysis"].get("status") != "ok":
+        print(
+            "::warning title=Growth AI analysis fallback::"
+            f"status={snapshot['analysis'].get('status', 'unknown')} "
+            f"fallback={snapshot['analysis'].get('fallback') or 'rule_based'}"
+        )
     snapshot["actions"] = build_actions(snapshot, history)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.history_dir.mkdir(parents=True, exist_ok=True)
