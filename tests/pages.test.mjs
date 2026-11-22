@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { readFile, access } from "node:fs/promises";
 import test from "node:test";
 
-const pages = ["index.html", "phrasecrate/index.html"];
-const canonicalUrls = ["https://errrt.github.io/", "https://errrt.github.io/phrasecrate/"];
+const pages = ["index.html", "phrasecrate/index.html", "phrasecrate/customer-support-email-templates/index.html"];
+const canonicalUrls = ["https://errrt.github.io/", "https://errrt.github.io/phrasecrate/", "https://errrt.github.io/phrasecrate/customer-support-email-templates/"];
 const home = await readFile(pages[0], "utf8");
 const product = await readFile(pages[1], "utf8");
 const beacon = home.match(/data-cf-beacon='([^']+)'/)[1];

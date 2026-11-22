@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "exportedAt": "2026-11-22T00:00:00.000Z",
+  "snippets": [
+    {
+      "id": "8138747d-b581-5580-868f-3e94cfc20c9b",
+      "name": "Request received",
+      "trigger": ";received",
+      "content": "Hi {{name}},\n\nThanks for reaching out about {{issue}}. I’m looking into it and will send an update by {{next_update}}. If anything changes on your end before then, feel free to reply here.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "37ee55f1-eca0-5e1f-93b4-cabd29c792bd",
+      "name": "Request more details",
+      "trigger": ";details",
+      "content": "Hi {{name}},\n\nI can help with this. Could you tell me {{detail_needed}}? That will help me narrow down what’s happening. Please leave out passwords and other sensitive details.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "112f94fb-0d1a-519f-a37d-e22e6d8d5965",
+      "name": "Follow up on an open request",
+      "trigger": ";followup",
+      "content": "Hi {{name}},\n\nI’m checking in about {{issue}}. Were you able to try {{suggested_step}}? If you’re still blocked, let me know what happens and I’ll pick up from there.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "f2736314-7e30-5de1-9b3f-aac10b1ea114",
+      "name": "Ask for bug reproduction steps",
+      "trigger": ";bug",
+      "content": "Hi {{name}},\n\nThanks for reporting this. Could you send the steps that led to {{issue}}, what you expected to happen, and your browser and version? If you include a screenshot, please hide any customer data or credentials.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "d77b3b0e-2dae-5ffd-ba0a-4c86b098111b",
+      "name": "Share a workaround",
+      "trigger": ";workaround",
+      "content": "Hi {{name}},\n\nWhile I investigate {{issue}}, you can try this workaround: {{workaround}}. If it doesn’t work for your setup, let me know where it stops so I can suggest another option.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "bcae435e-2adc-594d-9e5d-f7d1e5fdc8aa",
+      "name": "Confirm a fix",
+      "trigger": ";fixed",
+      "content": "Hi {{name}},\n\nThe fix for {{issue}} is now available. Please {{verification_step}} to check it on your end. If you still see the problem, reply with what happened and I’ll take another look.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "06f9baf3-37ad-5e6a-8e7f-537db891c6db",
+      "name": "Clarify a billing charge",
+      "trigger": ";billing",
+      "content": "Hi {{name}},\n\nI checked invoice {{invoice_number}}. The charge covers {{billing_reason}}. If this is a different charge from the one you’re asking about, send the charge date and amount. Please don’t send your card number.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "24c54770-c8f4-5655-8fe3-218604e0f139",
+      "name": "Acknowledge a refund request",
+      "trigger": ";refund",
+      "content": "Hi {{name}},\n\nI received your refund request for {{order_reference}}. I’ll check it and get back to you by {{next_update}} with the outcome or the next step.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "0538f689-04f5-5205-9e59-095c326675e1",
+      "name": "Help with a sign-in problem",
+      "trigger": ";signin",
+      "content": "Hi {{name}},\n\nTo recover access, please start with {{recovery_step}}. If that doesn’t work, tell me the error message and which step showed it. Please don’t send passwords, reset links, or verification codes.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "e35b7ff8-a59c-56eb-8d1f-af18e400f1fb",
+      "name": "Acknowledge a feature request",
+      "trigger": ";feature",
+      "content": "Hi {{name}},\n\nThanks for suggesting {{feature}}. What are you trying to accomplish when you need it, and how do you handle that today? That context will help me understand where the current workflow falls short.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "ec5f6357-54ad-51f3-8fb1-4106cd82fec3",
+      "name": "Share a progress update",
+      "trigger": ";progress",
+      "content": "Hi {{name}},\n\nA quick update on {{issue}}: {{current_status}}. My next step is {{next_step}}, and I’ll update you again by {{next_update}}.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    },
+    {
+      "id": "417c2d04-8452-5960-80ec-ed9102846aa2",
+      "name": "Close a resolved request",
+      "trigger": ";resolved",
+      "content": "Hi {{name}},\n\nI’m closing this request after {{resolution}}. If the issue comes back or you have a question about the fix, reply here and I’ll have the context to help.",
+      "createdAt": 1795305600000,
+      "updatedAt": 1795305600000
+    }
+  ]
+}
