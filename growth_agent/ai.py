@@ -46,6 +46,299 @@ SAFE_CONTENT = {
     "opportunities": "公式API v2の取得を継続し、完全観測が揃うまで部分集計同士の比較は保留します。",
 }
 
+DEFAULT_MAX_INPUT_BYTES = 60_000
+MIN_MAX_INPUT_BYTES = 4_096
+HARD_MAX_INPUT_BYTES = 120_000
+PERIOD_METRICS = ("installs", "uninstalls", "impressions", "page_views")
+
+
+def _max_input_bytes():
+    try:
+        configured = int(os.getenv("OPENAI_MAX_INPUT_BYTES", str(DEFAULT_MAX_INPUT_BYTES)))
+    except ValueError:
+        configured = DEFAULT_MAX_INPUT_BYTES
+    return max(MIN_MAX_INPUT_BYTES, min(configured, HARD_MAX_INPUT_BYTES))
+
+
+def _short(value, limit=240):
+    if value is None:
+        return None
+    text = " ".join(str(value).split())
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _data_contract():
+    return {
+        "chrome_web_store": {
+            "primary_source": "Chrome Web Store API v2 queryMetrics (official)",
+            "csv_role": "Fallback only when the official API request fails",
+            "public_listing_scraping": "Removed; no public store page scraping is used",
+            "partial_periods": "Use observed_days/expected_days and never present partial totals as complete periods",
+            "missing_values": "null/missing/pending/failed/unavailable are unknown states, never numeric zero",
+            "install_definition": "installs counts installation events, not unique or new users",
+            "daily_vs_rolling": "7d/30d are sums of daily installs; installs-7d is a separate rolling metric and is not collected",
+            "flow_narrative": (
+                "Leave all quantitative CWS installs/page_views claims and comparisons to the deterministic KPI table. "
+                "Do not repeat these numbers, rates, or comparisons in prose; discuss coverage limitations qualitatively. "
+                "Only fully observed metrics from the same window may be compared; never compare partial totals"
+            ),
+            "active_users": {
+                definition["api_metric"]: definition["description"]
+                for definition in CWS_ACTIVE_USER_DEFINITIONS.values()
+            },
+            "recommendation_guard": (
+                "When data_source is chrome_web_store_api_v2 and collection status is ok/partial, do not recommend "
+                "CSV import, API reconnection, authentication reconfiguration, or public listing scraping"
+            ),
+            "inference_guard": (
+                "Do not estimate churn, retention, conversion, or causal effects unless comparable observed metrics "
+                "directly support it. Never compare or divide installs by users/users-7d to calculate retention; "
+                "these metrics have different definitions and populations"
+            ),
+        }
+    }
+
+
+def _period_summary(value):
+    value = value or {}
+    return {
+        key: value.get(key)
+        for key in (
+            "value", "state", "observed_days", "expected_days", "pending_days",
+            "missing_days", "failed_days", "unavailable_days",
+        )
+    }
+
+
+def _source_summary(source, metric_names):
+    source = source or {}
+    metrics = source.get("metrics") or {}
+    return {
+        "status": source.get("status", "missing"),
+        "reason_code": source.get("reason_code"),
+        "error": _short(source.get("error")),
+        "metrics": {name: metrics.get(name) for name in metric_names},
+        "metric_states": metrics.get("metric_states") or {},
+    }
+
+
+def _cws_summary(source):
+    source = source or {}
+    metrics = source.get("metrics") or {}
+    periods = metrics.get("periods") or {}
+    active_users = metrics.get("active_users") or {}
+    return {
+        "status": source.get("status", "missing"),
+        "error": _short(source.get("error")),
+        "data_source": metrics.get("data_source"),
+        "periods": {
+            period: {
+                metric: _period_summary((periods.get(period) or {}).get(metric))
+                for metric in PERIOD_METRICS
+            }
+            for period in ("1d", "7d", "30d")
+        },
+        "active_users": {
+            metric: {
+                key: (active_users.get(metric) or {}).get(key)
+                for key in ("value", "date", "state")
+            }
+            for metric in ("users", "users_7d")
+        },
+        "metric_states": metrics.get("metric_states") or {},
+        "limitations": _short(metrics.get("limitations")),
+    }
+
+
+def _github_summary(source):
+    repos = (source or {}).get("metrics") or {}
+    return {
+        repo: {
+            "status": value.get("status", "missing"),
+            "error": _short(value.get("error")),
+            "metrics": {
+                key: (value.get("metrics") or {}).get(key)
+                for key in (
+                    "commits", "issues_created", "prs_created", "stars", "open_issues",
+                    "views", "unique_visitors", "clones", "unique_cloners",
+                )
+            },
+        }
+        for repo, value in repos.items()
+    }
+
+
+def _number(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _history_values(history, getter):
+    values = []
+    for item in history[-30:]:
+        value = _number(getter(item))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _change(label, current, history, getter):
+    current = _number(current)
+    values = _history_values(history, getter)
+    previous = values[-1] if values else None
+    result = {
+        "metric": label,
+        "current": current,
+        "previous": previous,
+        "average_7d": sum(values[-7:]) / len(values[-7:]) if values else None,
+        "average_30d": sum(values) / len(values) if values else None,
+        "observed_history_days": len(values),
+    }
+    result["delta_vs_previous"] = current - previous if current is not None and previous is not None else None
+    result["pct_vs_previous"] = (
+        (current - previous) / previous
+        if current is not None and previous not in (None, 0)
+        else None
+    )
+    return result
+
+
+def _analysis_changes(snapshot, history):
+    sources = snapshot.get("sources") or {}
+    cf = sources.get("cloudflare") or {}
+    cf_metrics = cf.get("metrics") or {}
+    changes = [
+        _change(
+            f"cloudflare.{metric}", cf_metrics.get(metric), history,
+            lambda item, metric=metric: (((item.get("sources") or {}).get("cloudflare") or {}).get("metrics") or {}).get(metric),
+        )
+        for metric in ("page_views", "visits")
+    ]
+    stores = sources.get("chrome_web_store") or {}
+    for slug, store in stores.items():
+        active = ((store.get("metrics") or {}).get("active_users") or {})
+        for metric in ("users", "users_7d"):
+            changes.append(_change(
+                f"chrome_web_store.{slug}.{metric}",
+                (active.get(metric) or {}).get("value"),
+                history,
+                lambda item, slug=slug, metric=metric: (((((((item.get("sources") or {})
+                    .get("chrome_web_store") or {}).get(slug) or {}).get("metrics") or {})
+                    .get("active_users") or {}).get(metric) or {}).get("value")),
+            ))
+    return changes
+
+
+def _quality_summary(snapshot, include_messages=True):
+    quality = snapshot.get("collection_quality") or {}
+    issues = []
+    for issue in quality.get("issues") or []:
+        item = {
+            key: issue.get(key)
+            for key in ("severity", "source", "reason_code")
+        }
+        if include_messages:
+            item["message"] = _short(issue.get("message"))
+        issues.append(item)
+    return {
+        "status": quality.get("status", "unknown"),
+        "counts": quality.get("counts") or {},
+        "missing_rate": quality.get("missing_rate"),
+        "issues": issues,
+    }
+
+
+def _breakdowns(snapshot):
+    sources = snapshot.get("sources") or {}
+    cf_metrics = (sources.get("cloudflare") or {}).get("metrics") or {}
+    stores = sources.get("chrome_web_store") or {}
+    return {
+        "cloudflare": {
+            "referrers": (cf_metrics.get("referrers") or [])[:5],
+            "outbound_clicks": cf_metrics.get("outbound_clicks") or {},
+        },
+        "chrome_web_store": {
+            slug: {
+                "active_user_trends_7d": {
+                    metric: (((store.get("metrics") or {}).get("active_users") or {}).get(metric) or {}).get("trend_7d", [])[-7:]
+                    for metric in ("users", "users_7d")
+                },
+                "source_breakdown_30d": (store.get("metrics") or {}).get("source_breakdown_30d") or {},
+            }
+            for slug, store in stores.items()
+        },
+    }
+
+
+def _build_analysis_context(snapshot, history, *, include_optional=True, include_issue_messages=True):
+    sources = snapshot.get("sources") or {}
+    changes = _analysis_changes(snapshot, history)
+    anomalies = [
+        {"metric": item["metric"], "pct_vs_previous": item["pct_vs_previous"]}
+        for item in changes
+        if item["pct_vs_previous"] is not None and abs(item["pct_vs_previous"]) >= 0.5
+    ]
+    context = {
+        "data_contract": _data_contract(),
+        "report": {
+            "date": snapshot.get("date"),
+            "data_quality": _quality_summary(snapshot, include_issue_messages),
+        },
+        "kpis": {
+            "cloudflare": _source_summary(
+                sources.get("cloudflare"),
+                ("page_views", "visits", "unique_users", "outbound_clicks"),
+            ),
+            "chrome_web_store": {
+                slug: _cws_summary(source)
+                for slug, source in (sources.get("chrome_web_store") or {}).items()
+            },
+            "github": _github_summary(sources.get("github")),
+            "x": _source_summary(
+                sources.get("x"),
+                ("posts", "impressions", "likes", "reposts", "replies", "engagement_rate"),
+            ),
+        },
+        "changes": changes,
+        "anomalies": anomalies,
+    }
+    if include_optional:
+        context["breakdowns"] = _breakdowns(snapshot)
+    return context
+
+
+def _encoded(context):
+    return json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+
+
+def _prepare_analysis_input(snapshot, history):
+    limit = _max_input_bytes()
+    full_snapshot_history_bytes = len(_encoded({"today": snapshot, "history": history[-30:]}).encode("utf-8"))
+    stages = (
+        ("none", True, True),
+        ("drop_optional_breakdowns", False, True),
+        ("drop_optional_and_issue_messages", False, False),
+    )
+    for level, include_optional, include_messages in stages:
+        text = _encoded(_build_analysis_context(
+            snapshot, history,
+            include_optional=include_optional,
+            include_issue_messages=include_messages,
+        ))
+        size = len(text.encode("utf-8"))
+        if size <= limit:
+            return text, {
+                "source_bytes": full_snapshot_history_bytes,
+                "input_bytes": size,
+                "limit_bytes": limit,
+                "compaction": level,
+            }
+    return None, {
+        "source_bytes": full_snapshot_history_bytes,
+        "input_bytes": size,
+        "limit_bytes": limit,
+        "compaction": "critical_payload_exceeds_limit",
+    }
+
 
 def _max_output_tokens():
     try:
@@ -302,39 +595,13 @@ def analyze(snapshot, history):
             "diagnostics": {},
         }
 
-    context = {
-        "data_contract": {
-            "chrome_web_store": {
-                "primary_source": "Chrome Web Store API v2 queryMetrics (official)",
-                "csv_role": "Fallback only when the official API request fails",
-                "public_listing_scraping": "Removed; no public store page scraping is used",
-                "partial_periods": "Use observed_days/expected_days and never present partial totals as complete periods",
-                "missing_values": "null/missing/pending/failed are unknown states, never numeric zero",
-                "install_definition": "installs counts installation events, not unique or new users",
-                "daily_vs_rolling": "7d/30d are sums of daily installs; installs-7d is a separate rolling metric and is not collected",
-                "flow_narrative": (
-                    "Leave all quantitative CWS installs/page_views claims and comparisons to the deterministic KPI table. "
-                    "Do not repeat these numbers, rates, or comparisons in prose; discuss coverage limitations qualitatively. "
-                    "Only fully observed metrics from the same window may be compared; never compare partial totals"
-                ),
-                "active_users": {
-                    definition["api_metric"]: definition["description"]
-                    for definition in CWS_ACTIVE_USER_DEFINITIONS.values()
-                },
-                "recommendation_guard": (
-                    "When data_source is chrome_web_store_api_v2 and collection status is ok/partial, do not recommend "
-                    "CSV import, API reconnection, authentication reconfiguration, or public listing scraping"
-                ),
-                "inference_guard": (
-                    "Do not estimate churn, retention, conversion, or causal effects unless comparable observed metrics "
-                    "directly support it. Never compare or divide installs by users/users-7d to calculate retention; "
-                    "these metrics have different definitions and populations"
-                ),
-            }
-        },
-        "today": snapshot,
-        "history": history[-30:],
-    }
+    input_text, input_diagnostics = _prepare_analysis_input(snapshot, history)
+    if input_text is None:
+        return _failure(
+            "OpenAI input could not preserve the required KPI and data-quality fields within "
+            f"the configured {input_diagnostics['limit_bytes']}-byte limit",
+            {"input": input_diagnostics},
+        )
     body = {
         "model": model,
         "instructions": (
@@ -346,7 +613,7 @@ def analyze(snapshot, history):
             "CWSのインストール回数・PVの数値や比率・比較はKPI表に任せ、文章に再掲しないでください。"
             "installsを新規ユーザー人数と表現せず、日別合計とinstalls-7dを混同しないでください。"
         ),
-        "input": json.dumps(context, ensure_ascii=False),
+        "input": input_text,
         "max_output_tokens": _max_output_tokens(),
         "text": {
             "format": {
@@ -369,9 +636,10 @@ def analyze(snapshot, history):
             body=body,
         )
     except Exception as error:
-        return _failure(f"OpenAI request failed: {error}")
+        return _failure(f"OpenAI request failed: {error}", {"input": input_diagnostics})
 
     diagnostics = _diagnostics(payload)
+    diagnostics["input"] = input_diagnostics
     if payload.get("status") != "completed":
         status = payload.get("status") or "unknown"
         reason = diagnostics["incomplete_reason"] or "not_provided"
@@ -404,6 +672,7 @@ def log_line(analysis):
     diagnostics = analysis.get("diagnostics") or {}
     usage = diagnostics.get("usage") or {}
     details = usage.get("output_tokens_details") or {}
+    input_details = diagnostics.get("input") or {}
     fields = [
         f"status={analysis.get('status', 'unknown')}",
         f"response_id={diagnostics.get('response_id') or 'n/a'}",
@@ -413,6 +682,9 @@ def log_line(analysis):
         f"input_tokens={usage.get('input_tokens', 'n/a')}",
         f"output_tokens={usage.get('output_tokens', 'n/a')}",
         f"reasoning_tokens={details.get('reasoning_tokens', 'n/a')}",
+        f"input_bytes={input_details.get('input_bytes', 'n/a')}",
+        f"input_limit_bytes={input_details.get('limit_bytes', 'n/a')}",
+        f"input_compaction={input_details.get('compaction', 'n/a')}",
         f"fallback={analysis.get('fallback') or 'none'}",
         f"content_validation={(diagnostics.get('content_validation') or {}).get('status', 'n/a')}",
     ]

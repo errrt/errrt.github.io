@@ -131,7 +131,7 @@ The report labels `installs / page-views` as a reference ratio, not a strict use
 ### Cost and safety controls
 
 - Cloudflare Web Analytics, Chrome Web Store API v2, Workload Identity Federation, and GitHub Actions within account limits add no new fixed paid service for this setup.
-- OpenAI uses Structured Outputs with minimal reasoning effort and is capped to 4,000 output tokens per run (8,000 hard cap in code). The response must be `completed` before JSON is parsed.
+- OpenAI uses Structured Outputs with minimal reasoning effort and is capped to 4,000 output tokens per run (8,000 hard cap in code). Its input is a deterministic digest of the current 1d/7d/30d KPIs, changes, anomalies, and data-quality states; raw daily arrays and complete historical snapshots are never sent. `OPENAI_MAX_INPUT_BYTES` defaults to 60,000 bytes (120,000-byte hard cap). Optional breakdowns and issue messages are removed in that order if the limit is exceeded; required KPI values and missing/pending/failed/unavailable states are never silently dropped. The response must be `completed` before JSON is parsed.
 - X is disabled until the username, paid access, and spend limit are explicitly approved.
 - The workflow does not create Issues/PRs, merge, deploy, or publish X posts. It only prepares and reports recommended actions.
 - Re-running the same date overwrites that date's snapshot, making collection idempotent.
