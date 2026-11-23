@@ -35,6 +35,7 @@ for (const [index, file] of pages.entries()) {
 test("homepage retains all products and links to the product page", () => {
   for (const name of ["PhraseCrate", "Tab Parcel", "Tiny Expander"]) assert.ok(home.includes(`<h3>${name}</h3>`));
   assert.ok(home.includes('href="/phrasecrate/"'));
+  assert.ok(home.includes('href="https://errrt.github.io/tiny-expander/"'));
   assert.ok(home.includes('data-link="tabParcel" href="/go/tabParcel/index.html"'));
   assert.ok(home.includes('data-link="tinyExpander" href="/go/tinyExpander/index.html"'));
 });
@@ -57,6 +58,6 @@ test("robots and sitemap expose only indexable canonical pages", async () => {
   assert.ok(robots.includes("Allow: /"));
   assert.ok(!robots.includes("Disallow:"));
   assert.ok(robots.includes("Sitemap: https://errrt.github.io/sitemap.xml"));
-  assert.deepEqual([...sitemap.matchAll(/<loc>(.*?)<\/loc>/g)].map((match) => match[1]), canonicalUrls);
+  assert.deepEqual([...sitemap.matchAll(/<loc>(.*?)<\/loc>/g)].map((match) => match[1]), [...canonicalUrls, "https://errrt.github.io/tiny-expander/"]);
   assert.ok(!sitemap.includes("/go/"));
 });
